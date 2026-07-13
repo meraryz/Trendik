@@ -276,32 +276,64 @@ def run_streamlit_app():
         
         /* Tight compact layout padding adjustment */
         .block-container {
-            padding-top: 4rem !important;
-            padding-bottom: 1rem !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
-            max-width: 98% !important;
+            padding-top: 1.5rem !important;
+            padding-bottom: 0.5rem !important;
+            padding-left: 1.5rem !important;
+            padding-right: 1.5rem !important;
+            max-width: 100% !important;
         }
         
-        /* Prevent deploy pane from overlapping filter controls */
+        /* Reduce all vertical gaps */
         div[data-testid="stVerticalBlock"] > div {
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.25rem !important;
+        }
+        hr {
+            margin-top: 0.3rem !important;
+            margin-bottom: 0.3rem !important;
         }
         
         /* Compact scan button in top-right */
         div.row-widget.stButton > button {
-            font-size: 13px !important;
-            padding: 0.35rem 0.8rem !important;
+            font-size: 12px !important;
+            padding: 0.2rem 0.6rem !important;
             width: auto !important;
             min-width: unset !important;
+        }
+        
+        /* Compact expander headers */
+        details > summary {
+            font-size: 0.8rem !important;
+            font-weight: 600 !important;
+            padding: 0.15rem 0.3rem !important;
+        }
+        .streamlit-expanderHeader {
+            font-size: 0.8rem !important;
+            padding: 0.15rem 0.3rem !important;
+        }
+        .streamlit-expanderContent {
+            padding: 0.2rem 0.1rem !important;
+        }
+        div[data-testid="stExpander"] {
+            border: none !important;
+        }
+        
+        /* Compact checkboxes and inputs inside expanders */
+        div[data-testid="stExpander"] label {
+            font-size: 0.75rem !important;
+        }
+        div[data-testid="stExpander"] input {
+            font-size: 0.75rem !important;
+        }
+        div[data-testid="stExpander"] div[data-baseweb="select"] > div {
+            min-height: 1.5rem !important;
         }
         
         /* Custom typography and brand coloring */
         h1, h2, h3, h4, h5, h6 {
             color: #2962ff !important;
             font-family: 'Inter', sans-serif !important;
-            margin-top: 0.4rem !important;
-            margin-bottom: 0.4rem !important;
+            margin-top: 0.2rem !important;
+            margin-bottom: 0.2rem !important;
             font-weight: 700 !important;
         }
         
@@ -398,12 +430,12 @@ def run_streamlit_app():
     col_title1, col_title2, col_title3 = st.columns([1.5, 2, 1])
     with col_title1:
         st.markdown(
-            "<h1 style='text-align: left; margin-bottom: 0;'>Trendik</h1>"
-            "<p style='text-align: left; font-size: 1.2rem; color: #787b86; margin-top: 0;'>Find the perfect stocks for you.</p>",
+            "<h2 style='text-align: left; margin-bottom: 0; color: #2962ff;'>Trendik</h2>"
+            "<p style='text-align: left; font-size: 0.85rem; color: #787b86; margin-top: 0;'>Find the perfect stocks for you.</p>",
             unsafe_allow_html=True
         )
     with col_title3:
-        st.markdown("<div style='margin-top: 0.8rem;'>", unsafe_allow_html=True)
+        st.markdown("<div style='margin-top: 0.3rem;'>", unsafe_allow_html=True)
         run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
         st.markdown("</div>", unsafe_allow_html=True)
 
