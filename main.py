@@ -29,7 +29,7 @@ def get_sp500_tickers():
     
     html_stream = io.StringIO(html_content)
     table = pd.read_html(html_stream)
-    df = table[0]
+    df = table[0] 
     
     sp500_data = {}
     for _, row in df.iterrows():
@@ -262,7 +262,7 @@ def run_streamlit_app():
         page_title="S&P 500 Stock Scanner",
         page_icon="📊",
         layout="wide",
-        initial_sidebar_state="expanded"
+        initial_sidebar_state="collapsed"
     )
     
     # Custom CSS Injector for Dark, High-Intensity Compact Aesthetic
@@ -276,20 +276,24 @@ def run_streamlit_app():
         
         /* Tight compact layout padding adjustment */
         .block-container {
-            padding-top: 1rem !important;
+            padding-top: 4rem !important;
             padding-bottom: 1rem !important;
             padding-left: 2rem !important;
             padding-right: 2rem !important;
             max-width: 98% !important;
         }
         
-        /* Sidebar styling override */
-        [data-testid="stSidebar"] {
-            background-color: #1e222d !important;
-            border-right: 1px solid #363a45 !important;
+        /* Prevent deploy pane from overlapping filter controls */
+        div[data-testid="stVerticalBlock"] > div {
+            margin-bottom: 0.5rem;
         }
-        [data-testid="stSidebar"] .block-container {
-            padding-top: 2rem !important;
+        
+        /* Compact scan button in top-right */
+        div.row-widget.stButton > button {
+            font-size: 13px !important;
+            padding: 0.35rem 0.8rem !important;
+            width: auto !important;
+            min-width: unset !important;
         }
         
         /* Custom typography and brand coloring */
@@ -386,54 +390,89 @@ def run_streamlit_app():
             st.error(f"Failed to load S&P 500 Stock Tickers list: {e}")
             st.stop()
 
-    # --- SIDEBAR: CONTROLS & SETTINGS ---
-    st.sidebar.markdown("### ⚙️ Filter Configuration")
-    
-    # 1. Technical Indicators section
-    st.sidebar.markdown("#### Technical Indicators")
-    sma50_chk = st.sidebar.checkbox("Price > 50-Day SMA", value=True)
-    sma100_chk = st.sidebar.checkbox("Price > 100-Day SMA", value=False)
-    sma150_chk = st.sidebar.checkbox("Price > 150-Day SMA", value=False)
-    sma200_chk = st.sidebar.checkbox("Price > 200-Day SMA", value=False)
-    alignment_chk = st.sidebar.checkbox("SMA Alignment (50>100>150>200)", value=False)
-    
-    # 2. Relative Position section
-    st.sidebar.markdown("#### Relative Position")
-    growth_target_sma = st.sidebar.selectbox("Target SMA", ["50", "100", "150", "200"], index=0)
-    sma_direction = st.sidebar.selectbox("Price Position", ["Above (Price > SMA)", "Below (Price < SMA)"], index=0)
-    
-    col_pos_min, col_pos_max = st.sidebar.columns(2)
-    with col_pos_min:
-        min_sma_growth = st.sidebar.text_input("Min %", value="", key="min_sma_growth", placeholder="e.g. 0")
-    with col_pos_max:
-        max_sma_growth = st.sidebar.text_input("Max %", value="", key="max_sma_growth", placeholder="e.g. 10")
-        
-    # 3. Fundamentals section
-    st.sidebar.markdown("#### Fundamentals")
-    fund_mode = st.sidebar.selectbox("Metric", ["Disabled", "Revenue Growth", "Earnings Growth"], index=0)
-    
-    col_fund_rate, col_fund_years = st.sidebar.columns(2)
-    with col_fund_rate:
-        fund_rate = st.sidebar.text_input("Min Rate %", value="", key="fund_rate", placeholder="e.g. 5")
-    with col_fund_years:
-        fund_years = st.sidebar.selectbox("Years", ["1", "2", "3"], index=0)
-        
-    # 4. Distance to ATH section
-    st.sidebar.markdown("#### Distance to ATH")
-    col_ath_min, col_ath_max = st.sidebar.columns(2)
-    with col_ath_min:
-        min_ath = st.sidebar.text_input("Min % (ATH)", value="", key="min_ath", placeholder="e.g. 1")
-    with col_ath_max:
-        max_ath = st.sidebar.text_input("Max % (ATH)", value="", key="max_ath", placeholder="e.g. 20")
-        
-    # 5. Display Formatting Settings
-    st.sidebar.markdown("---")
-    display_mode = st.sidebar.selectbox("View Options", ["Absolute Prices ($)", "Percentage Distance (%)"], index=0)
-    
-    st.sidebar.markdown("---")
+    # Initialize state before UI blocks
+    can_run_scan = True
+    validation_error = None
+
+    # --- TITLE ---
+    col_title1, col_title2, col_title3 = st.columns([1.5, 2, 1])
+    with col_title1:
+        st.markdown(
+            "<h1 style='text-align: left; margin-bottom: 0;'>Trendik</h1>"
+            "<p style='text-align: left; font-size: 1.2rem; color: #787b86; margin-top: 0;'>Find the perfect stocks for you.</p>",
+            unsafe_allow_html=True
+        )
+    with col_title3:
+        st.markdown("<div style='margin-top: 0.8rem;'>", unsafe_allow_html=True)
+        run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- HORIZONTAL FILTER PANE ---
+    col_t, col_r, col_f, col_a, col_d = st.columns(5)
+
+    with col_t:
+        with st.expander("📈 Technical"):
+            sma50_chk = st.checkbox("Price > 50-Day SMA", value=True)
+            sma100_chk = st.checkbox("Price > 100-Day SMA", value=False)
+            sma150_chk = st.checkbox("Price > 150-Day SMA", value=False)
+            sma200_chk = st.checkbox("Price > 200-Day SMA", value=False)
+            alignment_chk = st.checkbox("SMA Alignment (50>100>150>200)", value=False)
+
+    with col_r:
+        with st.expander("📐 Relative Position"):
+            growth_target_sma = st.selectbox(
+                "Target SMA", ["50", "100", "150", "200"], index=0,
+                label_visibility="collapsed"
+            )
+            sma_direction = st.selectbox(
+                "Position", ["Above (Price > SMA)", "Below (Price < SMA)"], index=0,
+                label_visibility="collapsed"
+            )
+            min_sma_growth = st.text_input(
+                "Min %", value="", key="min_sma_growth", placeholder="e.g. 0"
+            )
+            max_sma_growth = st.text_input(
+                "Max %", value="", key="max_sma_growth", placeholder="e.g. 10"
+            )
+
+    with col_f:
+        with st.expander("💰 Fundamentals"):
+            fund_mode = st.selectbox(
+                "Metric", ["Disabled", "Revenue Growth", "Earnings Growth"], index=0,
+                label_visibility="collapsed"
+            )
+            fund_rate = st.text_input(
+                "Min Rate %", value="", key="fund_rate", placeholder="e.g. 5"
+            )
+            fund_years = st.selectbox(
+                "Years", ["1", "2", "3"], index=0,
+                label_visibility="collapsed"
+            )
+
+    with col_a:
+        with st.expander("🏔️ Distance to ATH"):
+            min_ath = st.text_input(
+                "Min %", value="", key="min_ath", placeholder="e.g. 1"
+            )
+            max_ath = st.text_input(
+                "Max %", value="", key="max_ath", placeholder="e.g. 20"
+            )
+
+    with col_d:
+        st.markdown("**🎨 Display**")
+        display_mode = st.selectbox(
+            "View", ["Absolute Prices ($)", "Percentage Distance (%)"], index=0,
+            label_visibility="collapsed"
+        )
+        if st.button("🔄 Clear Cache", use_container_width=True):
+            st.cache_data.clear()
+            st.session_state.clear()
+            st.toast("Cache cleared & state reset!")
+            st.rerun()
+
+    st.markdown("---")
 
     # Inputs Parsing and Live Validation
-    can_run_scan = True
     try:
         min_ath_filter = parse_numeric_filter(min_ath, "Min Distance to ATH")
         max_ath_filter = parse_numeric_filter(max_ath, "Max Distance to ATH")
@@ -445,10 +484,10 @@ def run_streamlit_app():
         fund_years_target = int(fund_years)
         
         if fund_mode != "Disabled" and fund_rate_target is None:
-            st.sidebar.error("⚠️ Please provide a target Min Rate percentage for fundamentals.")
+            validation_error = "⚠️ Please provide a target Min Rate percentage for fundamentals."
             can_run_scan = False
     except ValueError as e:
-        st.sidebar.error(f"⚠️ {str(e)}")
+        validation_error = f"⚠️ {str(e)}"
         can_run_scan = False
 
     # Pack selected checkboxed variables
@@ -460,19 +499,12 @@ def run_streamlit_app():
     }
     is_above_mode = ("Above" in sma_direction)
 
-    # Sidebar Actions Buttons
-    run_clicked = st.sidebar.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=True)
-    
-    if st.sidebar.button("🔄 Clear Cache & Reset", use_container_width=True):
-        st.cache_data.clear()
-        st.session_state.clear()
-        st.toast("Cache cleared & state reset!")
-        st.rerun()
-
     # --- MAIN SCREEN INTERFACE ---
-    st.markdown("### 📊 S&P 500 Technical & Fundamental Stock Scanner")
-    st.markdown("A real-time, desktop-class stock market scanner bulk downloading technicals & analyzing corporate filings.")
+    if validation_error:
+        st.error(validation_error)
     
+    st.markdown("---")
+
     # Statistics Summary Metrics (Instantly reactive to current state)
     col_stats1, col_stats2, col_stats3 = st.columns(3)
     with col_stats1:
@@ -488,7 +520,7 @@ def run_streamlit_app():
     if run_clicked:
         with st.status("🚀 Running Scan...", expanded=True) as status:
             try:
-                status.write("📥 Bulking downloaded technicals from yfinance...")
+                status.write("📥 Bulk downloading technicals from yfinance...")
                 start_time = time.time()
                 
                 raw_results, num_candidates = run_scanner(
@@ -573,7 +605,7 @@ def run_streamlit_app():
                 use_container_width=True
             )
     else:
-        st.info("ℹ️ System Ready. Select technical & fundamental criteria on the left sidebar, and click **RUN MARKET SCAN** to begin.")
+        st.info("ℹ️ System Ready. Set your filters above, then click **RUN MARKET SCAN** to begin.")
 
 
 # =====================================================================
@@ -589,13 +621,10 @@ if __name__ == "__main__":
     if is_running_in_streamlit():
         run_streamlit_app()
     else:
-        # Standard CLI bootstrap re-launcher: if run with standard python (python main.py),
-        # we locate the local streamlit module in the virtual env and execute via subprocess.
         import os
         import sys
         import subprocess
         
-        # Determine current virtual environment Streamlit path
         streamlit_bin = os.path.join(os.path.dirname(sys.executable), "streamlit")
         if not os.path.exists(streamlit_bin):
             streamlit_bin = "streamlit"
