@@ -58,7 +58,8 @@ def get_cached_financials(ticker):
 # =====================================================================
 
 def process_ticker_fundamentals(
-    ticker, current_price, smas, ath_price, ath_needed_pct, 
+    ticker, current_price, smas, ath_price, ath_needed_pct,
+    atr_pct,
     fund_mode, fund_rate_target, fund_years_target, company_name
 ):
     """Worker function focusing strictly on fundamental statements validation for pre-filtered candidates."""
@@ -95,7 +96,8 @@ def process_ticker_fundamentals(
             "sma150": smas[150], 
             "sma200": smas[200],
             "ath": ath_price, 
-            "ath_needed": ath_needed_pct
+            "ath_needed": ath_needed_pct,
+            "atr_pct": atr_pct
         }
     except Exception:
         return None
@@ -112,6 +114,8 @@ def run_scanner(
     is_above_mode,
     min_sma_growth_filter,
     max_sma_growth_filter,
+    min_atr_filter,
+    max_atr_filter,
     fund_mode,
     fund_rate_target,
     fund_years_target
@@ -125,10 +129,22 @@ def run_scanner(
 
     # Vectorized SMA and Price extraction
     close_prices = price_df.xs('Close', level=1, axis=1)
+    high_prices = price_df.xs('High', level=1, axis=1)
+    low_prices = price_df.xs('Low', level=1, axis=1)
     current_prices = close_prices.iloc[-1]
     ath_prices = close_prices.max()
     sma_periods = [50, 100, 150, 200]
     smas_matrix = {p: close_prices.tail(p).mean() for p in sma_periods}
+    
+    # Vectorized ATR% computation (14-period)
+    prev_close = close_prices.shift(1)
+    hl = (high_prices - low_prices).abs()
+    hpc = (high_prices - prev_close).abs()
+    lpc = (low_prices - prev_close).abs()
+    tr = hl.where(hl >= hpc, hpc)
+    tr = tr.where(tr >= lpc, lpc)
+    atr = tr.tail(14).mean()
+    atr_pct_vals = (atr / current_prices) * 100
     
     # --- Vectorized Technical Filtering Stage ---
     passed_mask = current_prices.notna() & ath_prices.notna()
@@ -164,6 +180,12 @@ def run_scanner(
         passed_mask &= (sma_pos_pct >= min_sma_growth_filter)
     if max_sma_growth_filter is not None:
         passed_mask &= (sma_pos_pct <= max_sma_growth_filter)
+    
+    # 5. ATR% Volatility filters
+    if min_atr_filter is not None:
+        passed_mask &= (atr_pct_vals >= min_atr_filter)
+    if max_atr_filter is not None:
+        passed_mask &= (atr_pct_vals <= max_atr_filter)
 
     # Identify candidates that passed ALL technical filters
     candidates = passed_mask[passed_mask].index.tolist()
@@ -175,7 +197,8 @@ def run_scanner(
             s_dict = {p: float(smas_matrix[p][ticker]) for p in sma_periods}
             pre_calculated_data.append((
                 ticker, float(current_prices[ticker]), s_dict, 
-                float(ath_prices[ticker]), float(ath_dist_pct[ticker])
+                float(ath_prices[ticker]), float(ath_dist_pct[ticker]),
+                float(atr_pct_vals[ticker])
             ))
         except Exception: 
             continue
@@ -186,11 +209,11 @@ def run_scanner(
         futures = [
             executor.submit(
                 process_ticker_fundamentals, 
-                t, p, s, ath, ath_n, 
+                t, p, s, ath, ath_n, atr_v,
                 fund_mode, fund_rate_target, fund_years_target, 
                 tickers_dict.get(t, "Unknown")
             )
-            for t, p, s, ath, ath_n in pre_calculated_data
+            for t, p, s, ath, ath_n, atr_v in pre_calculated_data
         ]
         for future in futures:
             res = future.result()
@@ -229,6 +252,7 @@ def build_numeric_display_df(raw_results, display_mode):
         name = item["name"]
         ath = item["ath"]
         ath_dist = item["ath_needed"]
+        atr_pct = item.get("atr_pct", None)
         
         row = {
             "Ticker": ticker,
@@ -246,6 +270,8 @@ def build_numeric_display_df(raw_results, display_mode):
                 
         row["ATH"] = ath
         row["ATH Dist"] = ath_dist
+        if atr_pct is not None:
+            row["ATR%"] = atr_pct
         
         rows.append(row)
         
@@ -425,6 +451,16 @@ def run_streamlit_app():
     # Initialize state before UI blocks
     can_run_scan = True
     validation_error = None
+    
+    # Kick off background data download so the UI stays responsive
+    if "preload_started" not in st.session_state:
+        st.session_state.preload_started = True
+        import threading
+        threading.Thread(
+            target=download_technical_data,
+            args=(st.session_state.sp500_tickers,),
+            daemon=True
+        ).start()
 
     # --- TITLE ---
     col_title1, col_title2, col_title3 = st.columns([1.5, 2, 1])
@@ -440,67 +476,94 @@ def run_streamlit_app():
         st.markdown("</div>", unsafe_allow_html=True)
 
     # --- HORIZONTAL FILTER PANE ---
-    col_t, col_r, col_f, col_a, col_d = st.columns(5)
+    col_t, col_r, col_f, col_a = st.columns(4)
 
     with col_t:
         with st.expander("📈 Technical"):
-            sma50_chk = st.checkbox("Price > 50-Day SMA", value=True)
-            sma100_chk = st.checkbox("Price > 100-Day SMA", value=False)
-            sma150_chk = st.checkbox("Price > 150-Day SMA", value=False)
-            sma200_chk = st.checkbox("Price > 200-Day SMA", value=False)
-            alignment_chk = st.checkbox("SMA Alignment (50>100>150>200)", value=False)
+            sma50_chk = st.checkbox(
+                "Above 50-Day SMA", value=True,
+                help="Turn on to only show stocks currently trading above their 50-day average — catches short-term momentum."
+            )
+            sma100_chk = st.checkbox(
+                "Above 100-Day SMA", value=False,
+                help="Add the 100-day filter to confirm the stock has medium-term bullish strength behind it."
+            )
+            sma150_chk = st.checkbox(
+                "Above 150-Day SMA", value=False,
+                help="Enables a mid-to-long-term trend filter. Best for investors looking for sustained upward moves."
+            )
+            sma200_chk = st.checkbox(
+                "Above 200-Day SMA", value=False,
+                help="The classic bull-market indicator. Stocks above their 200-day average are considered in a long-term uptrend."
+            )
+            alignment_chk = st.checkbox(
+                "Bullish Alignment (50>100>150>200)", value=False,
+                help="Turn on to require all four SMAs to stack in order (50 over 100 over 150 over 200). This is known as a 'perfect order' and signals strong momentum across every timeframe."
+            )
+            st.markdown("**Volatility**")
+            acol1, acol2 = st.columns(2)
+            with acol1:
+                min_atr_pct = st.text_input(
+                    "Min ATR%", value="", key="min_atr_pct", placeholder="e.g. 0.5",
+                    help="Minimum Average True Range as a % of price. Higher values mean more volatile stocks. For example, '2' means the stock must have at least 2% daily volatility."
+                )
+            with acol2:
+                max_atr_pct = st.text_input(
+                    "Max ATR%", value="", key="max_atr_pct", placeholder="e.g. 5",
+                    help="Maximum Average True Range as a % of price. For example, '5' caps volatility to at most 5%. Leave blank for no limit."
+                )
 
     with col_r:
         with st.expander("📐 Relative Position"):
             growth_target_sma = st.selectbox(
-                "Target SMA", ["50", "100", "150", "200"], index=0,
-                label_visibility="collapsed"
+                "Target SMA",
+                ["50", "100", "150", "200"],
+                index=0,
+                format_func=lambda x: f"{x}-Day SMA",
+                label_visibility="collapsed",
+                help="Pick which Simple Moving Average (SMA) to measure distance from: 50-Day (short-term), 100-Day (medium), 150-Day (mid-long), or 200-Day (long-term)."
             )
             sma_direction = st.selectbox(
                 "Position", ["Above (Price > SMA)", "Below (Price < SMA)"], index=0,
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                help="'Above' finds stocks trading over the SMA (bullish). 'Below' finds stocks under it (could mean a pullback or discount)."
             )
             min_sma_growth = st.text_input(
-                "Min %", value="", key="min_sma_growth", placeholder="e.g. 0"
+                "Min %", value="", key="min_sma_growth", placeholder="e.g. 0",
+                help="Set a floor. For example, '2' means the stock must be at least 2% above (or below) the target SMA."
             )
             max_sma_growth = st.text_input(
-                "Max %", value="", key="max_sma_growth", placeholder="e.g. 10"
+                "Max %", value="", key="max_sma_growth", placeholder="e.g. 10",
+                help="Set a ceiling. For example, '10' caps results to stocks no more than 10% away from the SMA. Leave blank for no limit."
             )
 
     with col_f:
         with st.expander("💰 Fundamentals"):
             fund_mode = st.selectbox(
                 "Metric", ["Disabled", "Revenue Growth", "Earnings Growth"], index=0,
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                help="Choose 'Revenue Growth' to screen by sales increases, or 'Earnings Growth' for bottom-line profit growth. Set to 'Disabled' to skip fundamentals entirely."
             )
             fund_rate = st.text_input(
-                "Min Rate %", value="", key="fund_rate", placeholder="e.g. 5"
+                "Min Rate %", value="", key="fund_rate", placeholder="e.g. 5",
+                help="The minimum year-over-year growth rate required. For example, '10' means the company must have grown revenue or earnings by at least 10% each year."
             )
             fund_years = st.selectbox(
                 "Years", ["1", "2", "3"], index=0,
-                label_visibility="collapsed"
+                label_visibility="collapsed",
+                help="How many consecutive years the growth rate must hold. '2' means the company grew at the minimum rate for two years running."
             )
 
     with col_a:
         with st.expander("🏔️ Distance to ATH"):
             min_ath = st.text_input(
-                "Min %", value="", key="min_ath", placeholder="e.g. 1"
+                "Min %", value="", key="min_ath", placeholder="e.g. 1",
+                help="The furthest below its all-time high a stock can be. For example, '5' means the stock must be at least 5% below its peak."
             )
             max_ath = st.text_input(
-                "Max %", value="", key="max_ath", placeholder="e.g. 20"
+                "Max %", value="", key="max_ath", placeholder="e.g. 20",
+                help="The closest to its all-time high a stock can be. For example, '20' excludes stocks more than 20% below their peak. Helps avoid deeply beaten-down names."
             )
-
-    with col_d:
-        st.markdown("**🎨 Display**")
-        display_mode = st.selectbox(
-            "View", ["Absolute Prices ($)", "Percentage Distance (%)"], index=0,
-            label_visibility="collapsed"
-        )
-        if st.button("🔄 Clear Cache", use_container_width=True):
-            st.cache_data.clear()
-            st.session_state.clear()
-            st.toast("Cache cleared & state reset!")
-            st.rerun()
 
     st.markdown("---")
 
@@ -511,6 +574,9 @@ def run_streamlit_app():
         
         min_sma_growth_filter = parse_numeric_filter(min_sma_growth, "Min Position %")
         max_sma_growth_filter = parse_numeric_filter(max_sma_growth, "Max Position %")
+        
+        min_atr_filter = parse_numeric_filter(min_atr_pct, "Min ATR%")
+        max_atr_filter = parse_numeric_filter(max_atr_pct, "Max ATR%")
         
         fund_rate_target = parse_numeric_filter(fund_rate, "Min Rate %")
         fund_years_target = int(fund_years)
@@ -537,22 +603,11 @@ def run_streamlit_app():
     
     st.markdown("---")
 
-    # Statistics Summary Metrics (Instantly reactive to current state)
-    col_stats1, col_stats2, col_stats3 = st.columns(3)
-    with col_stats1:
-        st.metric(label="Total S&P 500 Tickers", value=len(st.session_state.get("sp500_tickers", [])))
-    with col_stats2:
-        st.metric(label="Passed Technical Filters", value=st.session_state.get("num_candidates", 0))
-    with col_stats3:
-        st.metric(label="Watchlist Matches Found", value=len(st.session_state.get("raw_results", [])))
-        
-    st.markdown("---")
-
     # SCAN PROCESS EXECUTION HANDLER
     if run_clicked:
         with st.status("🚀 Running Scan...", expanded=True) as status:
             try:
-                status.write("📥 Bulk downloading technicals from yfinance...")
+                status.write("⚙️ Running technical filters...")
                 start_time = time.time()
                 
                 raw_results, num_candidates = run_scanner(
@@ -566,6 +621,8 @@ def run_streamlit_app():
                     is_above_mode=is_above_mode,
                     min_sma_growth_filter=min_sma_growth_filter,
                     max_sma_growth_filter=max_sma_growth_filter,
+                    min_atr_filter=min_atr_filter,
+                    max_atr_filter=max_atr_filter,
                     fund_mode=fund_mode,
                     fund_rate_target=fund_rate_target,
                     fund_years_target=fund_years_target
@@ -577,6 +634,7 @@ def run_streamlit_app():
                 st.session_state.raw_results = raw_results
                 st.session_state.num_candidates = num_candidates
                 st.session_state.last_duration = duration
+                st.session_state.last_scan_time = time.strftime("%b %d, %Y at %I:%M %p")
                 st.session_state.scan_complete = True
                 
                 status.update(label=f"✅ Scan completed in {duration:.1f}s!", state="complete", expanded=False)
@@ -588,11 +646,45 @@ def run_streamlit_app():
 
     # WATCHLIST RESULTS RENDERER
     if st.session_state.get("scan_complete", False):
-        st.markdown("#### 📋 Market Watchlist Results")
+        rcol1, rcol2, rcol3, rcol4, rcol5 = st.columns([2, 1, 1.5, 1.5, 1])
         
-        # Display meta timer
-        if "last_duration" in st.session_state:
-            st.caption(f"⏱️ Scan duration: **{st.session_state.last_duration:.1f} seconds**")
+        with rcol1:
+            st.markdown("#### 📋 Market Watchlist Results")
+        
+        with rcol2:
+            count = len(st.session_state.get("raw_results", []))
+            st.markdown(
+                f"<p style='font-size: 1.5rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>"
+                f"{count} <span style='font-weight: 400; color: #787b86;'>matches</span></p>",
+                unsafe_allow_html=True
+            )
+        
+        with rcol3:
+            if "last_duration" in st.session_state:
+                st.markdown(
+                    f"<p style='font-size: 1rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>⏱️ Scan duration</p>"
+                    f"<p style='font-size: 1.5rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{st.session_state.last_duration:.1f}s</p>",
+                    unsafe_allow_html=True
+                )
+            if "last_scan_time" in st.session_state:
+                st.markdown(
+                    f"<p style='font-size: 0.85rem; color: #787b86; margin: 0; text-align: center;'>{st.session_state.last_scan_time}</p>",
+                    unsafe_allow_html=True
+                )
+        
+        with rcol4:
+            display_mode = st.radio(
+                "Display", ["Absolute Prices ($)", "Percentage Distance (%)"], index=0,
+                horizontal=True,
+                help="'Absolute Prices' shows raw dollar figures. 'Percentage Distance' shows how far each stock is from each SMA as a % — easier for comparing across stocks."
+            )
+        
+        with rcol5:
+            if st.button("🔄 Clear Cache", use_container_width=True):
+                st.cache_data.clear()
+                st.session_state.clear()
+                st.toast("Cache cleared & state reset!")
+                st.rerun()
             
         raw_results = st.session_state.get("raw_results", [])
         
@@ -611,6 +703,7 @@ def run_streamlit_app():
                 "Price": st.column_config.NumberColumn("Price ($)", format="$%.2f"),
                 "ATH": st.column_config.NumberColumn("ATH ($)", format="$%.2f"),
                 "ATH Dist": st.column_config.NumberColumn("Distance to ATH", format="%.2f%%"),
+                "ATR%": st.column_config.NumberColumn("ATR%", format="%.2f%%"),
             }
             
             for p in [50, 100, 150, 200]:
@@ -619,9 +712,24 @@ def run_streamlit_app():
                 else:
                     col_config[f"{p} SMA"] = st.column_config.NumberColumn(f"{p} SMA ($)", format="$%.2f")
             
+            # Conditional color for percentage columns
+            pct_cols = [c for c in df_display.columns if 'SMA Dist' in c]
+            
+            def color_pct(val):
+                if val is None or pd.isna(val):
+                    return ''
+                if val > 0:
+                    return 'color: #089981'
+                elif val < 0:
+                    return 'color: #f23645'
+                else:
+                    return 'color: #d1d4dc'
+            
+            styled_df = df_display.style.map(color_pct, subset=pct_cols)
+            
             # Display beautifully styled table
             st.dataframe(
-                df_display,
+                styled_df,
                 column_config=col_config,
                 use_container_width=True,
                 hide_index=True,
