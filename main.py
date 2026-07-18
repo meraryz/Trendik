@@ -7,6 +7,20 @@ import io
 import time
 from concurrent.futures import ThreadPoolExecutor
 from streamlit.runtime.scriptrunner import get_script_run_ctx
+import json
+import os
+
+PRESETS_FILE = "filter_presets.json"
+
+def load_presets():
+    if not os.path.exists(PRESETS_FILE):
+        return {}
+    with open(PRESETS_FILE) as f:
+        return json.load(f)
+
+def save_presets(presets):
+    with open(PRESETS_FILE, "w") as f:
+        json.dump(presets, f, indent=2)
 
 # =====================================================================
 # CACHED DATA FETCHING LAYER
@@ -268,8 +282,10 @@ def build_numeric_display_df(raw_results, display_mode):
             else:
                 row[f"{p} SMA"] = sma_val
                 
-        row["ATH"] = ath
-        row["ATH Dist"] = ath_dist
+        if is_percentage_mode:
+            row["ATH Dist"] = ath_dist
+        else:
+            row["ATH"] = ath
         if atr_pct is not None:
             row["ATR%"] = atr_pct
         
@@ -435,6 +451,12 @@ def run_streamlit_app():
         ::-webkit-scrollbar-thumb:hover {
             background: #2962ff;
         }
+        button[id^="preset_box_"] {
+            font-size: 0.75rem !important;
+            padding: 0.15rem 0.4rem !important;
+            min-height: unset !important;
+            line-height: 1.3 !important;
+        }
     </style>
     """, unsafe_allow_html=True)
     
@@ -451,6 +473,32 @@ def run_streamlit_app():
     # Initialize state before UI blocks
     can_run_scan = True
     validation_error = None
+
+    # Apply pending preset load before any widgets render
+    if "_load_preset_name" in st.session_state and st.session_state._load_preset_name:
+        preset_name = st.session_state._load_preset_name
+        st.session_state._load_preset_name = None
+        presets = load_presets()
+        if preset_name in presets:
+            for k, v in presets[preset_name].items():
+                if not k.startswith("_"):
+                    try:
+                        st.session_state[k] = v
+                    except Exception:
+                        pass
+
+    # Auto-load favorite preset on first run
+    if "_favorite_loaded" not in st.session_state:
+        st.session_state._favorite_loaded = True
+        presets = load_presets()
+        fav = presets.get("_favorite")
+        if fav and fav in presets:
+            for k, v in presets[fav].items():
+                if not k.startswith("_"):
+                    try:
+                        st.session_state[k] = v
+                    except Exception:
+                        pass
     
     # Kick off background data download so the UI stays responsive
     if "preload_started" not in st.session_state:
@@ -463,41 +511,136 @@ def run_streamlit_app():
         ).start()
 
     # --- TITLE ---
-    col_title1, col_title2, col_title3 = st.columns([1.5, 2, 1])
-    with col_title1:
-        st.markdown(
-            "<h2 style='text-align: left; margin-bottom: 0; color: #2962ff;'>Trendik</h2>"
-            "<p style='text-align: left; font-size: 0.85rem; color: #787b86; margin-top: 0;'>Find the perfect stocks for you.</p>",
-            unsafe_allow_html=True
-        )
-    with col_title3:
-        st.markdown("<div style='margin-top: 0.3rem;'>", unsafe_allow_html=True)
-        run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<h2 style='text-align: left; margin-bottom: 0; color: #2962ff;'>Trendik</h2>"
+        "<p style='text-align: left; font-size: 0.85rem; color: #787b86; margin-top: 0;'>Find the perfect stocks for you.</p>",
+        unsafe_allow_html=True
+    )
 
     # --- HORIZONTAL FILTER PANE ---
+    filters_expanded = not st.session_state.get("filters_minimized", False)
+    
+    # --- PRESETS ---
+    all_presets = load_presets()
+    preset_names = [k for k in all_presets if not k.startswith("_")]
+    fav = all_presets.get("_favorite", "")
+    active = st.session_state.get("_active_preset", "")
+    
+    preshow, prespacer = st.columns([1, 5])
+    with preshow:
+        with st.popover("💾 Presets", use_container_width=False):
+            presets = load_presets()
+            pcol1, pcol2 = st.columns([2, 1])
+            with pcol1:
+                preset_name = st.text_input("Preset name", key="preset_name", label_visibility="collapsed", placeholder="Name your preset...")
+            with pcol2:
+                if st.button("💾 Save", use_container_width=True):
+                    if preset_name.strip():
+                        presets[preset_name.strip()] = {
+                            "sma50_chk": st.session_state.sma50_chk,
+                            "sma100_chk": st.session_state.sma100_chk,
+                            "sma150_chk": st.session_state.sma150_chk,
+                            "sma200_chk": st.session_state.sma200_chk,
+                            "alignment_chk": st.session_state.alignment_chk,
+                            "min_atr_pct": st.session_state.min_atr_pct,
+                            "max_atr_pct": st.session_state.max_atr_pct,
+                            "growth_target_sma": st.session_state.growth_target_sma,
+                            "sma_direction": st.session_state.sma_direction,
+                            "min_sma_growth": st.session_state.min_sma_growth,
+                            "max_sma_growth": st.session_state.max_sma_growth,
+                            "fund_mode": st.session_state.fund_mode,
+                            "fund_rate": st.session_state.fund_rate,
+                            "fund_years": st.session_state.fund_years,
+                            "min_ath": st.session_state.min_ath,
+                            "max_ath": st.session_state.max_ath,
+                            "display_mode": st.session_state.display_mode,
+                        }
+                        save_presets(presets)
+                        st.success(f"Saved '{preset_name.strip()}'")
+                        st.rerun()
+
+    if preset_names:
+        cols = [1] * len(preset_names)
+        pcols = st.columns(cols)
+        for i, pname in enumerate(preset_names):
+            with pcols[i]:
+                is_selected = (pname == active)
+                is_fav = (pname == fav)
+                star = "⭐ " if is_fav else "☆ "
+                label = star + pname
+                if st.button(label, use_container_width=True, key=f"preset_box_{pname}", type="primary" if is_selected else "secondary"):
+                    if not is_selected:
+                        st.session_state._load_preset_name = pname
+                        st.session_state._active_preset = pname
+                    else:
+                        st.session_state._active_preset = ""
+                    st.rerun()
+
+        if active and active in all_presets:
+            is_fav = (active == fav)
+            acol1, acol2, acol3, acol4 = st.columns([1, 1, 1, 4])
+            with acol1:
+                if st.button("☆ Set Favorite" if not is_fav else "⭐ Unfavorite", use_container_width=True, key="set_fav_btn"):
+                    presets = load_presets()
+                    presets["_favorite"] = active if not is_fav else ""
+                    save_presets(presets)
+                    st.rerun()
+            with acol2:
+                if st.button("🔄 Update", use_container_width=True, key="update_btn"):
+                    presets = load_presets()
+                    presets[active] = {
+                        "sma50_chk": st.session_state.sma50_chk,
+                        "sma100_chk": st.session_state.sma100_chk,
+                        "sma150_chk": st.session_state.sma150_chk,
+                        "sma200_chk": st.session_state.sma200_chk,
+                        "alignment_chk": st.session_state.alignment_chk,
+                        "min_atr_pct": st.session_state.min_atr_pct,
+                        "max_atr_pct": st.session_state.max_atr_pct,
+                        "growth_target_sma": st.session_state.growth_target_sma,
+                        "sma_direction": st.session_state.sma_direction,
+                        "min_sma_growth": st.session_state.min_sma_growth,
+                        "max_sma_growth": st.session_state.max_sma_growth,
+                        "fund_mode": st.session_state.fund_mode,
+                        "fund_rate": st.session_state.fund_rate,
+                        "fund_years": st.session_state.fund_years,
+                        "min_ath": st.session_state.min_ath,
+                        "max_ath": st.session_state.max_ath,
+                        "display_mode": st.session_state.display_mode,
+                    }
+                    save_presets(presets)
+                    st.rerun()
+            with acol3:
+                if st.button("🗑️ Delete", use_container_width=True, key="delete_btn"):
+                    presets = load_presets()
+                    del presets[active]
+                    if active == fav:
+                        presets["_favorite"] = ""
+                    st.session_state._active_preset = ""
+                    save_presets(presets)
+                    st.rerun()
+    
     col_t, col_r, col_f, col_a = st.columns(4)
 
     with col_t:
-        with st.expander("📈 Technical"):
+        with st.expander("📈 Technical", expanded=filters_expanded):
             sma50_chk = st.checkbox(
-                "Above 50-Day SMA", value=True,
+                "Above 50-Day SMA", value=True, key="sma50_chk",
                 help="Turn on to only show stocks currently trading above their 50-day average — catches short-term momentum."
             )
             sma100_chk = st.checkbox(
-                "Above 100-Day SMA", value=False,
+                "Above 100-Day SMA", value=False, key="sma100_chk",
                 help="Add the 100-day filter to confirm the stock has medium-term bullish strength behind it."
             )
             sma150_chk = st.checkbox(
-                "Above 150-Day SMA", value=False,
+                "Above 150-Day SMA", value=False, key="sma150_chk",
                 help="Enables a mid-to-long-term trend filter. Best for investors looking for sustained upward moves."
             )
             sma200_chk = st.checkbox(
-                "Above 200-Day SMA", value=False,
+                "Above 200-Day SMA", value=False, key="sma200_chk",
                 help="The classic bull-market indicator. Stocks above their 200-day average are considered in a long-term uptrend."
             )
             alignment_chk = st.checkbox(
-                "Bullish Alignment (50>100>150>200)", value=False,
+                "Bullish Alignment (50>100>150>200)", value=False, key="alignment_chk",
                 help="Turn on to require all four SMAs to stack in order (50 over 100 over 150 over 200). This is known as a 'perfect order' and signals strong momentum across every timeframe."
             )
             st.markdown("**Volatility**")
@@ -514,18 +657,19 @@ def run_streamlit_app():
                 )
 
     with col_r:
-        with st.expander("📐 Relative Position"):
+        with st.expander("📐 Relative Position", expanded=filters_expanded):
             growth_target_sma = st.selectbox(
                 "Target SMA",
                 ["50", "100", "150", "200"],
                 index=0,
                 format_func=lambda x: f"{x}-Day SMA",
                 label_visibility="collapsed",
+                key="growth_target_sma",
                 help="Pick which Simple Moving Average (SMA) to measure distance from: 50-Day (short-term), 100-Day (medium), 150-Day (mid-long), or 200-Day (long-term)."
             )
             sma_direction = st.selectbox(
                 "Position", ["Above (Price > SMA)", "Below (Price < SMA)"], index=0,
-                label_visibility="collapsed",
+                label_visibility="collapsed", key="sma_direction",
                 help="'Above' finds stocks trading over the SMA (bullish). 'Below' finds stocks under it (could mean a pullback or discount)."
             )
             min_sma_growth = st.text_input(
@@ -538,10 +682,10 @@ def run_streamlit_app():
             )
 
     with col_f:
-        with st.expander("💰 Fundamentals"):
+        with st.expander("💰 Fundamentals", expanded=filters_expanded):
             fund_mode = st.selectbox(
                 "Metric", ["Disabled", "Revenue Growth", "Earnings Growth"], index=0,
-                label_visibility="collapsed",
+                label_visibility="collapsed", key="fund_mode",
                 help="Choose 'Revenue Growth' to screen by sales increases, or 'Earnings Growth' for bottom-line profit growth. Set to 'Disabled' to skip fundamentals entirely."
             )
             fund_rate = st.text_input(
@@ -550,12 +694,12 @@ def run_streamlit_app():
             )
             fund_years = st.selectbox(
                 "Years", ["1", "2", "3"], index=0,
-                label_visibility="collapsed",
+                label_visibility="collapsed", key="fund_years",
                 help="How many consecutive years the growth rate must hold. '2' means the company grew at the minimum rate for two years running."
             )
 
     with col_a:
-        with st.expander("🏔️ Distance to ATH"):
+        with st.expander("🏔️ Distance to ATH", expanded=filters_expanded):
             min_ath = st.text_input(
                 "Min %", value="", key="min_ath", placeholder="e.g. 1",
                 help="The furthest below its all-time high a stock can be. For example, '5' means the stock must be at least 5% below its peak."
@@ -564,6 +708,23 @@ def run_streamlit_app():
                 "Max %", value="", key="max_ath", placeholder="e.g. 20",
                 help="The closest to its all-time high a stock can be. For example, '20' excludes stocks more than 20% below their peak. Helps avoid deeply beaten-down names."
             )
+
+    # --- ACTION BUTTONS ROW ---
+    acol1, acol2, acol3 = st.columns([1.5, 0.5, 2.5])
+    with acol1:
+        inner1, inner2 = st.columns(2)
+        with inner1:
+            if st.button("🔽 Minimize", use_container_width=True, key="min_filters"):
+                st.session_state.filters_minimized = True
+                st.rerun()
+        with inner2:
+            if st.button("🔍 Maximize", use_container_width=True, key="max_filters"):
+                st.session_state.filters_minimized = False
+                st.rerun()
+    with acol3:
+        st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+        run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
 
@@ -604,7 +765,11 @@ def run_streamlit_app():
     st.markdown("---")
 
     # SCAN PROCESS EXECUTION HANDLER
-    if run_clicked:
+    refresh = st.session_state.get("refresh_clicked", False)
+    if refresh:
+        st.session_state.refresh_clicked = False
+    if run_clicked or refresh:
+        st.session_state.filters_minimized = True
         with st.status("🚀 Running Scan...", expanded=True) as status:
             try:
                 status.write("⚙️ Running technical filters...")
@@ -634,7 +799,7 @@ def run_streamlit_app():
                 st.session_state.raw_results = raw_results
                 st.session_state.num_candidates = num_candidates
                 st.session_state.last_duration = duration
-                st.session_state.last_scan_time = time.strftime("%b %d, %Y at %I:%M %p")
+                st.session_state.last_scan_time = time.strftime("%d/%m/%Y %H:%M")
                 st.session_state.scan_complete = True
                 
                 status.update(label=f"✅ Scan completed in {duration:.1f}s!", state="complete", expanded=False)
@@ -675,15 +840,14 @@ def run_streamlit_app():
         with rcol4:
             display_mode = st.radio(
                 "Display", ["Absolute Prices ($)", "Percentage Distance (%)"], index=0,
-                horizontal=True,
-                help="'Absolute Prices' shows raw dollar figures. 'Percentage Distance' shows how far each stock is from each SMA as a % — easier for comparing across stocks."
+                horizontal=True, key="display_mode",
+                help="Only affects Price column format. SMA and SMA Dist columns are always visible."
             )
         
         with rcol5:
-            if st.button("🔄 Clear Cache", use_container_width=True):
+            if st.button("🔄 Refresh", use_container_width=True):
                 st.cache_data.clear()
-                st.session_state.clear()
-                st.toast("Cache cleared & state reset!")
+                st.session_state.refresh_clicked = True
                 st.rerun()
             
         raw_results = st.session_state.get("raw_results", [])
@@ -695,14 +859,12 @@ def run_streamlit_app():
             df_display = build_numeric_display_df(raw_results, display_mode)
             
             is_percentage_mode = (display_mode == "Percentage Distance (%)")
-            
+
             # Configure native formatting configurations for optimal sorting and design
             col_config = {
                 "Ticker": st.column_config.TextColumn("Ticker", width="small"),
                 "Company Name": st.column_config.TextColumn("Company Name", width="medium"),
-                "Price": st.column_config.NumberColumn("Price ($)", format="$%.2f"),
-                "ATH": st.column_config.NumberColumn("ATH ($)", format="$%.2f"),
-                "ATH Dist": st.column_config.NumberColumn("Distance to ATH", format="%.2f%%"),
+                "Price": st.column_config.NumberColumn("Price ($)" if not is_percentage_mode else "Price", format="$%.2f"),
                 "ATR%": st.column_config.NumberColumn("ATR%", format="%.2f%%"),
             }
             
@@ -711,6 +873,11 @@ def run_streamlit_app():
                     col_config[f"{p} SMA Dist"] = st.column_config.NumberColumn(f"{p} SMA Dist", format="%+.2f%%")
                 else:
                     col_config[f"{p} SMA"] = st.column_config.NumberColumn(f"{p} SMA ($)", format="$%.2f")
+
+            if is_percentage_mode:
+                col_config["ATH Dist"] = st.column_config.NumberColumn("Distance to ATH", format="%.2f%%")
+            else:
+                col_config["ATH"] = st.column_config.NumberColumn("ATH ($)", format="$%.2f")
             
             # Conditional color for percentage columns
             pct_cols = [c for c in df_display.columns if 'SMA Dist' in c]
