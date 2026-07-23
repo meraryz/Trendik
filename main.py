@@ -28,7 +28,7 @@ def save_presets(presets):
 
 @st.cache_data(ttl=86400)  # Cache Wikipedia S&P 500 list for 24 hours
 def get_sp500_tickers():
-    """Acquires and returns S&P 500 companies list from Wikipedia."""
+    """Acquires S&P 500 companies list with ticker, name, and sector from Wikipedia."""
     ssl_context = ssl._create_unverified_context()
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     headers = {
@@ -48,7 +48,10 @@ def get_sp500_tickers():
     sp500_data = {}
     for _, row in df.iterrows():
         clean_ticker = str(row['Symbol']).replace('.', '-')
-        sp500_data[clean_ticker] = str(row['Security'])
+        sp500_data[clean_ticker] = {
+            "name": str(row['Security']),
+            "sector": row.get('GICS Sector', 'Unknown')
+        }
         
     return sp500_data
 
@@ -74,7 +77,7 @@ def get_cached_financials(ticker):
 def process_ticker_fundamentals(
     ticker, current_price, smas, ath_price, ath_needed_pct,
     atr_pct,
-    fund_mode, fund_rate_target, fund_years_target, company_name
+    fund_mode, fund_rate_target, fund_years_target, company_name, sector
 ):
     """Worker function focusing strictly on fundamental statements validation for pre-filtered candidates."""
     try:
@@ -104,6 +107,7 @@ def process_ticker_fundamentals(
         return {
             "ticker": ticker, 
             "name": company_name, 
+            "sector": sector,
             "price": current_price,
             "sma50": smas[50], 
             "sma100": smas[100], 
@@ -132,7 +136,9 @@ def run_scanner(
     max_atr_filter,
     fund_mode,
     fund_rate_target,
-    fund_years_target
+    fund_years_target,
+    sma_slope,
+    sma_slope_period
 ):
     """Core scanning orchestrator applying vectorized technical masks followed by multithreaded fundamentals checks."""
     # Step 1: Bulk download technical pricing timelines
@@ -160,6 +166,21 @@ def run_scanner(
     atr = tr.tail(14).mean()
     atr_pct_vals = (atr / current_prices) * 100
     
+    # Vectorized return columns (1D, 5D, 1M, 6M, YTD, 1Y)
+    dates = close_prices.index
+    current_year = dates[-1].year
+    prev_year_mask = dates.year < current_year
+    ret_1d = safe_ret(close_prices, 1)
+    ret_5d = safe_ret(close_prices, 5)
+    ret_1m = safe_ret(close_prices, 21)
+    ret_6m = safe_ret(close_prices, 126)
+    ret_1y = safe_ret(close_prices, 252)
+    if prev_year_mask.any():
+        ytd_start = close_prices.loc[prev_year_mask].iloc[-1]
+        ret_ytd = ((close_prices.iloc[-1] - ytd_start) / ytd_start) * 100
+    else:
+        ret_ytd = safe_ret(close_prices, len(close_prices) - 1)
+    
     # --- Vectorized Technical Filtering Stage ---
     passed_mask = current_prices.notna() & ath_prices.notna()
     
@@ -183,23 +204,32 @@ def run_scanner(
     
     # 4. Target SMA Position filters
     target_sma_vals = smas_matrix[growth_sma_period]
-    if is_above_mode:
-        passed_mask &= (current_prices > target_sma_vals)
-        sma_pos_pct = ((current_prices - target_sma_vals) / target_sma_vals) * 100
-    else:
-        passed_mask &= (current_prices < target_sma_vals)
-        sma_pos_pct = ((target_sma_vals - current_prices) / current_prices) * 100
-        
-    if min_sma_growth_filter is not None:
-        passed_mask &= (sma_pos_pct >= min_sma_growth_filter)
-    if max_sma_growth_filter is not None:
-        passed_mask &= (sma_pos_pct <= max_sma_growth_filter)
+    sma_pos_pct = ((current_prices - target_sma_vals) / target_sma_vals) * 100
+    has_growth_limit = min_sma_growth_filter is not None or max_sma_growth_filter is not None
+    if has_growth_limit:
+        if is_above_mode:
+            passed_mask &= (current_prices > target_sma_vals)
+        else:
+            passed_mask &= (current_prices < target_sma_vals)
+        if min_sma_growth_filter is not None:
+            passed_mask &= (sma_pos_pct >= min_sma_growth_filter)
+        if max_sma_growth_filter is not None:
+            passed_mask &= (sma_pos_pct <= max_sma_growth_filter)
     
     # 5. ATR% Volatility filters
     if min_atr_filter is not None:
         passed_mask &= (atr_pct_vals >= min_atr_filter)
     if max_atr_filter is not None:
         passed_mask &= (atr_pct_vals <= max_atr_filter)
+    
+    # 6. SMA Slope filter (Rising/Falling)
+    if sma_slope != "Disabled":
+        slope_sma = smas_matrix[sma_slope_period]
+        sma_5ago = close_prices.tail(sma_slope_period + 5).head(sma_slope_period).mean()
+        if sma_slope == "Rising":
+            passed_mask &= (slope_sma > sma_5ago)
+        else:
+            passed_mask &= (slope_sma < sma_5ago)
 
     # Identify candidates that passed ALL technical filters
     candidates = passed_mask[passed_mask].index.tolist()
@@ -209,10 +239,16 @@ def run_scanner(
     for ticker in candidates:
         try:
             s_dict = {p: float(smas_matrix[p][ticker]) for p in sma_periods}
+            ticker_info = tickers_dict.get(ticker, {})
             pre_calculated_data.append((
                 ticker, float(current_prices[ticker]), s_dict, 
                 float(ath_prices[ticker]), float(ath_dist_pct[ticker]),
-                float(atr_pct_vals[ticker])
+                float(atr_pct_vals[ticker]),
+                ticker_info.get("name", "Unknown"),
+                ticker_info.get("sector", "Unknown"),
+                float(ret_1d[ticker]), float(ret_5d[ticker]),
+                float(ret_1m[ticker]), float(ret_6m[ticker]),
+                float(ret_ytd[ticker]), float(ret_1y[ticker]),
             ))
         except Exception: 
             continue
@@ -220,18 +256,20 @@ def run_scanner(
     # Step 2: High-concurrency processing for candidates
     matches = []
     with ThreadPoolExecutor(max_workers=50) as executor:
-        futures = [
-            executor.submit(
+        futures = []
+        for data in pre_calculated_data:
+            t, p, s, ath, ath_n, atr_v, name, sector, r1d, r5d, r1m, r6m, rytd, r1y = data
+            fut = executor.submit(
                 process_ticker_fundamentals, 
                 t, p, s, ath, ath_n, atr_v,
                 fund_mode, fund_rate_target, fund_years_target, 
-                tickers_dict.get(t, "Unknown")
+                name, sector
             )
-            for t, p, s, ath, ath_n, atr_v in pre_calculated_data
-        ]
-        for future in futures:
-            res = future.result()
-            if res is not None: 
+            futures.append((fut, r1d, r5d, r1m, r6m, rytd, r1y))
+        for fut, r1d, r5d, r1m, r6m, rytd, r1y in futures:
+            res = fut.result()
+            if res is not None:
+                res.update({"1D": r1d, "5D": r5d, "1M": r1m, "6M": r6m, "YTD": rytd, "1Y": r1y})
                 matches.append(res)
 
     raw_results = sorted(matches, key=lambda x: x['ticker'])
@@ -253,7 +291,6 @@ def parse_numeric_filter(val, field_name):
 
 
 def build_numeric_display_df(raw_results, display_mode):
-    """Generates display-ready Pandas DataFrame with raw floats for correct sorting."""
     if not raw_results:
         return pd.DataFrame()
     
@@ -264,15 +301,31 @@ def build_numeric_display_df(raw_results, display_mode):
         price = item["price"]
         ticker = item["ticker"]
         name = item["name"]
+        sector = item.get("sector", "Unknown")
         ath = item["ath"]
         ath_dist = item["ath_needed"]
         atr_pct = item.get("atr_pct", None)
+        ret_1d = item.get("1D", None)
+        ret_5d = item.get("5D", None)
+        ret_1m = item.get("1M", None)
+        ret_6m = item.get("6M", None)
+        ret_ytd = item.get("YTD", None)
+        ret_1y = item.get("1Y", None)
         
         row = {
             "Ticker": ticker,
             "Company Name": name,
+            "Sector": sector,
             "Price": price,
         }
+        
+        if atr_pct is not None:
+            row["ATR%"] = atr_pct
+        
+        for label, val in [("1D", ret_1d), ("5D", ret_5d), ("1M", ret_1m),
+                           ("6M", ret_6m), ("YTD", ret_ytd), ("1Y", ret_1y)]:
+            if val is not None:
+                row[label] = val
         
         for p in [50, 100, 150, 200]:
             sma_val = item[f"sma{p}"]
@@ -286,12 +339,40 @@ def build_numeric_display_df(raw_results, display_mode):
             row["ATH Dist"] = ath_dist
         else:
             row["ATH"] = ath
-        if atr_pct is not None:
-            row["ATR%"] = atr_pct
         
         rows.append(row)
         
     return pd.DataFrame(rows)
+
+
+LOGICAL_COLUMNS = [
+    "Ticker", "Company Name", "Sector", "Price", "ATR%", "1D", "5D", "1M", "6M", "YTD", "1Y",
+    "SMA50", "SMA100", "SMA150", "SMA200", "ATH"
+]
+
+def resolve_visible_columns(selected, is_pct_mode):
+    suffix = " SMA Dist" if is_pct_mode else " SMA"
+    mapping = {
+        "Ticker": ["Ticker"], "Company Name": ["Company Name"], "Sector": ["Sector"],
+        "Price": ["Price"], "ATR%": ["ATR%"],
+        "1D": ["1D"], "5D": ["5D"], "1M": ["1M"], "6M": ["6M"], "YTD": ["YTD"], "1Y": ["1Y"],
+        "SMA50": [f"50{suffix}"], "SMA100": [f"100{suffix}"],
+        "SMA150": [f"150{suffix}"], "SMA200": [f"200{suffix}"],
+    }
+    if is_pct_mode:
+        mapping["ATH"] = ["ATH Dist"]
+    else:
+        mapping["ATH"] = ["ATH"]
+    result = []
+    for col in selected:
+        result.extend(mapping.get(col, [col]))
+    return result
+
+
+def safe_ret(close_prices, lag):
+    n = len(close_prices)
+    lag = min(lag, n - 1)
+    return ((close_prices.iloc[-1] - close_prices.iloc[-(lag+1)]) / close_prices.iloc[-(lag+1)]) * 100
 
 
 # =====================================================================
@@ -457,6 +538,28 @@ def run_streamlit_app():
             min-height: unset !important;
             line-height: 1.3 !important;
         }
+        button[kind="primary"] {
+            background: #1a3a6a !important;
+            border-color: #2962ff !important;
+        }
+        div[data-testid="stHorizontalBlock"] button[kind="primary"] {
+            background: #f23645 !important; color: white !important;
+            border: none !important; border-radius: 6px !important; font-size: 0.85rem !important;
+            height: 32px !important; line-height: 1 !important;
+        }
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+            background: #089981 !important; color: white !important;
+            border: none !important; border-radius: 6px !important; font-size: 0.85rem !important;
+            height: 32px !important; line-height: 1 !important;
+        }
+        div[data-testid="stPopoverBody"] div[data-testid="stHorizontalBlock"] button[kind="primary"] {
+            background: #1a3a6a !important; border-color: #2962ff !important;
+            border-radius: initial !important; font-size: initial !important;
+        }
+        div[data-testid="stPopoverBody"] div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+            background: initial !important; color: initial !important;
+            border-radius: initial !important; font-size: initial !important;
+        }
     </style>
     """, unsafe_allow_html=True)
     
@@ -469,11 +572,25 @@ def run_streamlit_app():
         except Exception as e:
             st.error(f"Failed to load S&P 500 Stock Tickers list: {e}")
             st.stop()
+    
+    if "visible_columns" not in st.session_state:
+        st.session_state.visible_columns = LOGICAL_COLUMNS[:]
 
     # Initialize state before UI blocks
     can_run_scan = True
     validation_error = None
 
+    # Show deferred toast before any widgets render
+    toast_msg = st.session_state.pop("_preset_toast", None)
+    if toast_msg:
+        st.toast(toast_msg)
+
+    # Apply pending reset before any widgets render
+    if st.session_state.pop("_reset_filters", False):
+        for k in list(st.session_state.keys()):
+            if not k.startswith("_") and k not in ("sp500_data", "sp500_tickers", "visible_columns", "preload_started", "raw_results", "num_candidates", "last_duration", "last_scan_time", "scan_complete"):
+                del st.session_state[k]
+    
     # Apply pending preset load before any widgets render
     if "_load_preset_name" in st.session_state and st.session_state._load_preset_name:
         preset_name = st.session_state._load_preset_name
@@ -500,16 +617,6 @@ def run_streamlit_app():
                     except Exception:
                         pass
     
-    # Kick off background data download so the UI stays responsive
-    if "preload_started" not in st.session_state:
-        st.session_state.preload_started = True
-        import threading
-        threading.Thread(
-            target=download_technical_data,
-            args=(st.session_state.sp500_tickers,),
-            daemon=True
-        ).start()
-
     # --- TITLE ---
     st.markdown(
         "<h2 style='text-align: left; margin-bottom: 0; color: #2962ff;'>Trendik</h2>"
@@ -554,9 +661,12 @@ def run_streamlit_app():
                             "min_ath": st.session_state.min_ath,
                             "max_ath": st.session_state.max_ath,
                             "display_mode": st.session_state.display_mode,
+                            "sma_slope": st.session_state.get("sma_slope", "Disabled"),
+                            "sma_slope_period": st.session_state.get("sma_slope_period", "50"),
+                            "visible_columns": st.session_state.visible_columns,
                         }
                         save_presets(presets)
-                        st.success(f"Saved '{preset_name.strip()}'")
+                        st.session_state._preset_toast = f"✅ Saved '{preset_name.strip()}'"
                         st.rerun()
 
     if preset_names:
@@ -606,8 +716,12 @@ def run_streamlit_app():
                         "min_ath": st.session_state.min_ath,
                         "max_ath": st.session_state.max_ath,
                         "display_mode": st.session_state.display_mode,
+                        "sma_slope": st.session_state.get("sma_slope", "Disabled"),
+                        "sma_slope_period": st.session_state.get("sma_slope_period", "50"),
+                        "visible_columns": st.session_state.visible_columns,
                     }
                     save_presets(presets)
+                    st.session_state._preset_toast = f"✅ Preset '{active}' updated"
                     st.rerun()
             with acol3:
                 if st.button("🗑️ Delete", use_container_width=True, key="delete_btn"):
@@ -680,6 +794,15 @@ def run_streamlit_app():
                 "Max %", value="", key="max_sma_growth", placeholder="e.g. 10",
                 help="Set a ceiling. For example, '10' caps results to stocks no more than 10% away from the SMA. Leave blank for no limit."
             )
+            sma_slope = st.selectbox(
+                "SMA Slope", ["Disabled", "Rising", "Falling"], index=0, key="sma_slope",
+                help="'Rising' requires the target SMA to be higher than 5 days ago (uptrend). 'Falling' requires it to be lower (downtrend)."
+            )
+            sma_slope_period = st.selectbox(
+                "Slope SMA", ["50", "100", "150", "200"], index=0,
+                format_func=lambda x: f"{x}-Day SMA", label_visibility="collapsed",
+                key="sma_slope_period"
+            )
 
     with col_f:
         with st.expander("💰 Fundamentals", expanded=filters_expanded):
@@ -710,7 +833,7 @@ def run_streamlit_app():
             )
 
     # --- ACTION BUTTONS ROW ---
-    acol1, acol2, acol3 = st.columns([1.5, 0.5, 2.5])
+    acol1, acol2, acol3, acol4 = st.columns([1.5, 0.5, 1, 2.5])
     with acol1:
         inner1, inner2 = st.columns(2)
         with inner1:
@@ -721,7 +844,10 @@ def run_streamlit_app():
             if st.button("🔍 Maximize", use_container_width=True, key="max_filters"):
                 st.session_state.filters_minimized = False
                 st.rerun()
-    with acol3:
+    with acol2:
+        if st.button("🔄 Reset", use_container_width=True, key="reset_filters"):
+            st.session_state._reset_filters = True
+    with acol4:
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
         run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -772,7 +898,7 @@ def run_streamlit_app():
         st.session_state.filters_minimized = True
         with st.status("🚀 Running Scan...", expanded=True) as status:
             try:
-                status.write("⚙️ Running technical filters...")
+                status.write("📥 Downloading 1-year market data for all S&P 500 stocks...")
                 start_time = time.time()
                 
                 raw_results, num_candidates = run_scanner(
@@ -790,7 +916,9 @@ def run_streamlit_app():
                     max_atr_filter=max_atr_filter,
                     fund_mode=fund_mode,
                     fund_rate_target=fund_rate_target,
-                    fund_years_target=fund_years_target
+                    fund_years_target=fund_years_target,
+                    sma_slope=st.session_state.get("sma_slope", "Disabled"),
+                    sma_slope_period=int(st.session_state.get("sma_slope_period", "50"))
                 )
                 
                 duration = time.time() - start_time
@@ -855,54 +983,51 @@ def run_streamlit_app():
         if not raw_results:
             st.warning("⚠️ No stocks matched all filtering criteria.")
         else:
-            # Rebuild dataframe
             df_display = build_numeric_display_df(raw_results, display_mode)
-            
             is_percentage_mode = (display_mode == "Percentage Distance (%)")
+            visible_columns = list(st.session_state.get("visible_columns", LOGICAL_COLUMNS))
 
-            # Configure native formatting configurations for optimal sorting and design
-            col_config = {
-                "Ticker": st.column_config.TextColumn("Ticker", width="small"),
-                "Company Name": st.column_config.TextColumn("Company Name", width="medium"),
-                "Price": st.column_config.NumberColumn("Price ($)" if not is_percentage_mode else "Price", format="$%.2f"),
-                "ATR%": st.column_config.NumberColumn("ATR%", format="%.2f%%"),
-            }
-            
-            for p in [50, 100, 150, 200]:
-                if is_percentage_mode:
-                    col_config[f"{p} SMA Dist"] = st.column_config.NumberColumn(f"{p} SMA Dist", format="%+.2f%%")
-                else:
-                    col_config[f"{p} SMA"] = st.column_config.NumberColumn(f"{p} SMA ($)", format="$%.2f")
+            selected_cols = resolve_visible_columns(visible_columns, is_percentage_mode)
+            selected_cols = [c for c in selected_cols if c in df_display.columns]
+            df_display = df_display[selected_cols]
 
-            if is_percentage_mode:
-                col_config["ATH Dist"] = st.column_config.NumberColumn("Distance to ATH", format="%.2f%%")
-            else:
-                col_config["ATH"] = st.column_config.NumberColumn("ATH ($)", format="$%.2f")
-            
-            # Conditional color for percentage columns
-            pct_cols = [c for c in df_display.columns if 'SMA Dist' in c]
-            
-            def color_pct(val):
-                if val is None or pd.isna(val):
+            pct_cols = [c for c in df_display.columns if 'SMA Dist' in c or 'ATH Dist' in c or c in ('1D', '5D', '1M', '6M', 'YTD', '1Y')]
+
+            # Conditional color coding for percentage columns
+            def _style_pct(v):
+                if pd.isna(v):
                     return ''
-                if val > 0:
-                    return 'color: #089981'
-                elif val < 0:
-                    return 'color: #f23645'
-                else:
-                    return 'color: #d1d4dc'
-            
-            styled_df = df_display.style.map(color_pct, subset=pct_cols)
-            
-            # Display beautifully styled table
+                if v > 0:
+                    return 'color: #089981;'
+                if v < 0:
+                    return 'color: #f23645;'
+                return 'color: #d1d4dc;'
+
+            styled = df_display.style.map(_style_pct, subset=pct_cols)
+
+            col_config = {}
+            for col in df_display.columns:
+                if col == "Price":
+                    col_config[col] = st.column_config.NumberColumn(format="$%.2f")
+                elif col == "ATR%":
+                    col_config[col] = st.column_config.NumberColumn(format="%.2f%%")
+                elif col in ("1D", "5D", "1M", "6M", "YTD", "1Y"):
+                    col_config[col] = st.column_config.NumberColumn(format="%+.2f%%")
+                elif "SMA Dist" in col or "ATH Dist" in col:
+                    col_config[col] = st.column_config.NumberColumn(format="%+.2f%%")
+                elif col == "ATH":
+                    col_config[col] = st.column_config.NumberColumn(format="$%.2f")
+                elif "SMA" in col:
+                    col_config[col] = st.column_config.NumberColumn(format="$%.2f")
+
             st.dataframe(
-                styled_df,
+                styled,
                 column_config=col_config,
+                height=600,
                 use_container_width=True,
                 hide_index=True,
             )
-            
-            # Interactive CSV download button
+
             csv_data = df_display.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Export Current Watchlist as CSV",
