@@ -2,8 +2,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import urllib.request
-import ssl
 import io
+import ssl
 import time
 from concurrent.futures import ThreadPoolExecutor
 from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -11,25 +11,35 @@ import json
 import os
 
 PRESETS_FILE = "filter_presets.json"
+PERSIST_PRESETS_KEY = "_presets_cache"
 
 def load_presets():
+    if PERSIST_PRESETS_KEY in st.session_state:
+        return st.session_state[PERSIST_PRESETS_KEY]
     if not os.path.exists(PRESETS_FILE):
         return {}
     with open(PRESETS_FILE) as f:
-        return json.load(f)
+        presets = json.load(f)
+    st.session_state[PERSIST_PRESETS_KEY] = presets
+    return presets
 
 def save_presets(presets):
     with open(PRESETS_FILE, "w") as f:
         json.dump(presets, f, indent=2)
+    st.session_state[PERSIST_PRESETS_KEY] = presets
 
 # =====================================================================
 # CACHED DATA FETCHING LAYER
 # =====================================================================
 
-@st.cache_data(ttl=86400)  # Cache Wikipedia S&P 500 list for 24 hours
+try:
+    import certifi
+    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _SSL_CONTEXT = ssl._create_unverified_context()
+
 def get_sp500_tickers():
     """Acquires S&P 500 companies list with ticker, name, and sector from Wikipedia."""
-    ssl_context = ssl._create_unverified_context()
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -38,7 +48,7 @@ def get_sp500_tickers():
     }
     
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, context=ssl_context) as response:
+    with urllib.request.urlopen(req, context=_SSL_CONTEXT) as response:
         html_content = response.read().decode('utf-8')
     
     html_stream = io.StringIO(html_content)
@@ -49,8 +59,8 @@ def get_sp500_tickers():
     for _, row in df.iterrows():
         clean_ticker = str(row['Symbol']).replace('.', '-')
         sp500_data[clean_ticker] = {
-            "name": str(row['Security']),
-            "sector": row.get('GICS Sector', 'Unknown')
+            "name": str(row['Security']) if pd.notna(row.get('Security')) else "Unknown",
+            "sector": str(row['GICS Sector']) if pd.notna(row.get('GICS Sector')) else "Unknown"
         }
         
     return sp500_data
@@ -60,6 +70,8 @@ def get_sp500_tickers():
 def download_technical_data(tickers):
     """Downloads 1-year daily historical pricing timelines for all tickers."""
     price_df = yf.download(tickers, period="1y", group_by='ticker', progress=False, threads=True)
+    if not isinstance(price_df.columns, pd.MultiIndex):
+        price_df.columns = pd.MultiIndex.from_product([price_df.columns, ['']])
     return price_df
 
 
@@ -118,6 +130,8 @@ def process_ticker_fundamentals(
             "atr_pct": atr_pct
         }
     except Exception:
+        import sys
+        print(f"[WARN] Fundamental processing failed for {ticker}", file=sys.stderr)
         return None
 
 
@@ -298,12 +312,16 @@ def build_numeric_display_df(raw_results, display_mode):
     is_percentage_mode = (display_mode == "Percentage Distance (%)")
     
     for item in raw_results:
-        price = item["price"]
-        ticker = item["ticker"]
-        name = item["name"]
+        ticker = item.get("ticker")
+        if not ticker or (isinstance(ticker, float) and pd.isna(ticker)):
+            continue
+        price = item.get("price")
+        name = item.get("name")
+        ath = item.get("ath")
+        ath_dist = item.get("ath_needed")
+        if price is None or name is None or ath is None or ath_dist is None:
+            continue
         sector = item.get("sector", "Unknown")
-        ath = item["ath"]
-        ath_dist = item["ath_needed"]
         atr_pct = item.get("atr_pct", None)
         ret_1d = item.get("1D", None)
         ret_5d = item.get("5D", None)
@@ -371,8 +389,10 @@ def resolve_visible_columns(selected, is_pct_mode):
 
 def safe_ret(close_prices, lag):
     n = len(close_prices)
+    if n < 2:
+        return 0.0
     lag = min(lag, n - 1)
-    return ((close_prices.iloc[-1] - close_prices.iloc[-(lag+1)]) / close_prices.iloc[-(lag+1)]) * 100
+    return ((close_prices.iloc[-1] - close_prices.iloc[-1 - lag]) / close_prices.iloc[-1 - lag]) * 100
 
 
 # =====================================================================
@@ -490,17 +510,6 @@ def run_streamlit_app():
             border: none !important;
         }
         
-        /* Secondary Neutral Button */
-        div.stButton:nth-child(2) > button {
-            background-color: #2a2e39 !important;
-            color: #d1d4dc !important;
-            border: 1px solid #363a45 !important;
-        }
-        div.stButton:nth-child(2) > button:hover {
-            background-color: #363a45 !important;
-            color: #ffffff !important;
-        }
-        
         /* Metric values formatting */
         div[data-testid="stMetricValue"] {
             font-size: 24px !important;
@@ -551,6 +560,20 @@ def run_streamlit_app():
             background: #089981 !important; color: white !important;
             border: none !important; border-radius: 6px !important; font-size: 0.85rem !important;
             height: 32px !important; line-height: 1 !important;
+        }
+        div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+            background: #089981 !important; color: white !important;
+            border: none !important;
+        }
+        /* Secondary Neutral Button */
+        div.stButton:nth-child(2) > button {
+            background-color: #2a2e39 !important;
+            color: #d1d4dc !important;
+            border: 1px solid #363a45 !important;
+        }
+        div.stButton:nth-child(2) > button:hover {
+            background-color: #363a45 !important;
+            color: #ffffff !important;
         }
         div[data-testid="stPopoverBody"] div[data-testid="stHorizontalBlock"] button[kind="primary"] {
             background: #1a3a6a !important; border-color: #2962ff !important;
@@ -616,6 +639,7 @@ def run_streamlit_app():
                         st.session_state[k] = v
                     except Exception:
                         pass
+            st.session_state._active_preset = fav
     
     # --- TITLE ---
     st.markdown(
@@ -670,7 +694,11 @@ def run_streamlit_app():
                         st.rerun()
 
     if preset_names:
-        cols = [1] * len(preset_names)
+        n = len(preset_names)
+        if n < 7:
+            cols = [1] * n + [7 - n]
+        else:
+            cols = [1] * n
         pcols = st.columns(cols)
         for i, pname in enumerate(preset_names):
             with pcols[i]:
@@ -989,7 +1017,7 @@ def run_streamlit_app():
 
             selected_cols = resolve_visible_columns(visible_columns, is_percentage_mode)
             selected_cols = [c for c in selected_cols if c in df_display.columns]
-            df_display = df_display[selected_cols]
+            df_display = df_display[selected_cols].dropna(how='all')
 
             pct_cols = [c for c in df_display.columns if 'SMA Dist' in c or 'ATH Dist' in c or c in ('1D', '5D', '1M', '6M', 'YTD', '1Y')]
 
@@ -1003,7 +1031,7 @@ def run_streamlit_app():
                     return 'color: #f23645;'
                 return 'color: #d1d4dc;'
 
-            styled = df_display.style.map(_style_pct, subset=pct_cols)
+            styled = (df_display.style.map if hasattr(df_display.style, "map") else df_display.style.applymap)(_style_pct, subset=pct_cols)
 
             col_config = {}
             for col in df_display.columns:
@@ -1020,10 +1048,12 @@ def run_streamlit_app():
                 elif "SMA" in col:
                     col_config[col] = st.column_config.NumberColumn(format="$%.2f")
 
+            nrows = len(df_display)
+            table_height = max(50, min(600, 38 + nrows * 37))
             st.dataframe(
                 styled,
                 column_config=col_config,
-                height=600,
+                height=table_height,
                 use_container_width=True,
                 hide_index=True,
             )

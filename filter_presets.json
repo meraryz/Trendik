@@ -16,7 +16,7 @@
     "fund_years": "1",
     "min_ath": "",
     "max_ath": "",
-    "display_mode": "Percentage Distance (%)",
+    "display_mode": "Absolute Prices ($)",
     "sma_slope": "Rising",
     "sma_slope_period": "150",
     "visible_columns": [
