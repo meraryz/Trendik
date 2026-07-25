@@ -165,7 +165,7 @@ def run_scanner(
     close_prices = price_df.xs('Close', level=1, axis=1)
     high_prices = price_df.xs('High', level=1, axis=1)
     low_prices = price_df.xs('Low', level=1, axis=1)
-    current_prices = close_prices.iloc[-1]
+    current_prices = close_prices.ffill().iloc[-1]
     ath_prices = close_prices.max()
     sma_periods = [50, 100, 150, 200]
     smas_matrix = {p: close_prices.tail(p).mean() for p in sma_periods}
@@ -191,7 +191,7 @@ def run_scanner(
     ret_1y = safe_ret(close_prices, 252)
     if prev_year_mask.any():
         ytd_start = close_prices.loc[prev_year_mask].iloc[-1]
-        ret_ytd = ((close_prices.iloc[-1] - ytd_start) / ytd_start) * 100
+        ret_ytd = ((close_prices.ffill().iloc[-1] - ytd_start) / ytd_start) * 100
     else:
         ret_ytd = safe_ret(close_prices, len(close_prices) - 1)
     
@@ -392,7 +392,9 @@ def safe_ret(close_prices, lag):
     if n < 2:
         return 0.0
     lag = min(lag, n - 1)
-    return ((close_prices.iloc[-1] - close_prices.iloc[-1 - lag]) / close_prices.iloc[-1 - lag]) * 100
+    current = close_prices.ffill().iloc[-1]
+    past = close_prices.iloc[-1 - lag]
+    return ((current - past) / past) * 100
 
 
 # =====================================================================
@@ -995,9 +997,11 @@ def run_streamlit_app():
         
         with rcol2:
             count = len(st.session_state.get("raw_results", []))
+            num_cand = st.session_state.get("num_candidates", 0)
             st.markdown(
-                f"<p style='font-size: 1.5rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>"
-                f"{count} <span style='font-weight: 400; color: #787b86;'>matches</span></p>",
+                f"<p style='font-size: 1.2rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>"
+                f"{num_cand} <span style='font-weight: 400; color: #787b86;'>candidates</span> "
+                f"→ {count} <span style='font-weight: 400; color: #787b86;'>matches</span></p>",
                 unsafe_allow_html=True
             )
         
