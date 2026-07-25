@@ -610,9 +610,29 @@ def run_streamlit_app():
 
     # Apply pending reset before any widgets render
     if st.session_state.pop("_reset_filters", False):
-        for k in list(st.session_state.keys()):
-            if not k.startswith("_") and k not in ("sp500_data", "sp500_tickers", "visible_columns", "preload_started", "raw_results", "num_candidates", "last_duration", "last_scan_time", "scan_complete"):
-                del st.session_state[k]
+        st.session_state.sma50_chk = False
+        st.session_state.sma100_chk = False
+        st.session_state.sma150_chk = False
+        st.session_state.sma200_chk = False
+        st.session_state.alignment_chk = False
+        st.session_state.min_atr_pct = ""
+        st.session_state.max_atr_pct = ""
+        st.session_state.growth_target_sma = "50"
+        st.session_state.sma_direction = "Above (Price > SMA)"
+        st.session_state.min_sma_growth = ""
+        st.session_state.max_sma_growth = ""
+        st.session_state.sma_slope = "Disabled"
+        st.session_state.sma_slope_period = "50"
+        st.session_state.fund_mode = "Disabled"
+        st.session_state.fund_rate = ""
+        st.session_state.fund_years = "1"
+        st.session_state.min_ath = ""
+        st.session_state.max_ath = ""
+        st.session_state.display_mode = "Absolute Prices ($)"
+        st.session_state._load_preset_name = None
+        st.session_state._active_preset = ""
+        st.session_state.scan_complete = False
+        st.session_state.pop("raw_results", None)
     
     # Apply pending preset load before any widgets render
     if "_load_preset_name" in st.session_state and st.session_state._load_preset_name:
@@ -873,8 +893,9 @@ def run_streamlit_app():
                 st.session_state.filters_minimized = False
                 st.rerun()
     with acol2:
-        if st.button("🔄 Reset", use_container_width=True, key="reset_filters"):
+        if st.button("🔄 Reset Filters", use_container_width=True, key="reset_filters"):
             st.session_state._reset_filters = True
+            st.rerun()
     with acol4:
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
         run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
