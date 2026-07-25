@@ -21,7 +21,6 @@
     "sma_slope_period": "150",
     "visible_columns": [
       "Ticker",
-      "Company Name",
       "Sector",
       "Price",
       "ATR%",
@@ -29,13 +28,7 @@
       "5D",
       "1M",
       "6M",
-      "YTD",
-      "1Y",
-      "SMA50",
-      "SMA100",
-      "SMA150",
-      "SMA200",
-      "ATH"
+      "Company Name"
     ]
   },
   "_favorite": "Michu",

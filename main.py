@@ -11,6 +11,7 @@ import json
 import os
 
 PRESETS_FILE = "filter_presets.json"
+COLUMNS_FILE = "user_columns.json"
 PERSIST_PRESETS_KEY = "_presets_cache"
 
 def load_presets():
@@ -27,6 +28,28 @@ def save_presets(presets):
     with open(PRESETS_FILE, "w") as f:
         json.dump(presets, f, indent=2)
     st.session_state[PERSIST_PRESETS_KEY] = presets
+
+def load_column_prefs():
+    if not os.path.exists(COLUMNS_FILE):
+        return None
+    try:
+        with open(COLUMNS_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def save_column_prefs(cols):
+    with open(COLUMNS_FILE, "w") as f:
+        json.dump(cols, f)
+
+def _toggle_col(col):
+    if st.session_state.get(f"_col_t_{col}", False):
+        if col not in st.session_state.visible_columns:
+            st.session_state.visible_columns.append(col)
+    else:
+        if col in st.session_state.visible_columns:
+            st.session_state.visible_columns.remove(col)
+    save_column_prefs(list(st.session_state.visible_columns))
 
 # =====================================================================
 # CACHED DATA FETCHING LAYER
@@ -163,9 +186,10 @@ def run_scanner(
 
     # Vectorized SMA and Price extraction
     close_prices = price_df.xs('Close', level=1, axis=1)
+    close_prices = close_prices.dropna(how='all').ffill()
     high_prices = price_df.xs('High', level=1, axis=1)
     low_prices = price_df.xs('Low', level=1, axis=1)
-    current_prices = close_prices.ffill().iloc[-1]
+    current_prices = close_prices.iloc[-1]
     ath_prices = close_prices.max()
     sma_periods = [50, 100, 150, 200]
     smas_matrix = {p: close_prices.tail(p).mean() for p in sma_periods}
@@ -191,7 +215,7 @@ def run_scanner(
     ret_1y = safe_ret(close_prices, 252)
     if prev_year_mask.any():
         ytd_start = close_prices.loc[prev_year_mask].iloc[-1]
-        ret_ytd = ((close_prices.ffill().iloc[-1] - ytd_start) / ytd_start) * 100
+        ret_ytd = ((close_prices.iloc[-1] - ytd_start) / ytd_start) * 100
     else:
         ret_ytd = safe_ret(close_prices, len(close_prices) - 1)
     
@@ -368,6 +392,14 @@ LOGICAL_COLUMNS = [
     "SMA50", "SMA100", "SMA150", "SMA200", "ATH"
 ]
 
+COLUMN_GROUPS = [
+    ("📋 Stock Info", ["Ticker", "Company Name", "Sector"]),
+    ("💰 Price & Volatility", ["Price", "ATR%"]),
+    ("📈 Returns", ["1D", "5D", "1M", "6M", "YTD", "1Y"]),
+    ("📊 SMA Values", ["SMA50", "SMA100", "SMA150", "SMA200"]),
+    ("🏔️ All-Time High", ["ATH"]),
+]
+
 def resolve_visible_columns(selected, is_pct_mode):
     suffix = " SMA Dist" if is_pct_mode else " SMA"
     mapping = {
@@ -392,9 +424,7 @@ def safe_ret(close_prices, lag):
     if n < 2:
         return 0.0
     lag = min(lag, n - 1)
-    current = close_prices.ffill().iloc[-1]
-    past = close_prices.iloc[-1 - lag]
-    return ((current - past) / past) * 100
+    return ((close_prices.iloc[-1] - close_prices.iloc[-1 - lag]) / close_prices.iloc[-1 - lag]) * 100
 
 
 # =====================================================================
@@ -599,7 +629,8 @@ def run_streamlit_app():
             st.stop()
     
     if "visible_columns" not in st.session_state:
-        st.session_state.visible_columns = LOGICAL_COLUMNS[:]
+        saved = load_column_prefs()
+        st.session_state.visible_columns = saved or LOGICAL_COLUMNS[:]
 
     # Initialize state before UI blocks
     can_run_scan = True
@@ -1031,6 +1062,35 @@ def run_streamlit_app():
                 st.session_state.refresh_clicked = True
                 st.rerun()
             
+        with st.popover("👁️ Columns"):
+            bcol1, bcol2 = st.columns(2)
+            with bcol1:
+                if st.button("Select All", use_container_width=True, type="primary"):
+                    st.session_state.visible_columns = LOGICAL_COLUMNS[:]
+                    for col in LOGICAL_COLUMNS:
+                        st.session_state[f"_col_t_{col}"] = True
+                    save_column_prefs(LOGICAL_COLUMNS[:])
+                    st.rerun()
+            with bcol2:
+                if st.button("Unselect All", use_container_width=True, type="primary"):
+                    st.session_state.visible_columns = []
+                    for col in LOGICAL_COLUMNS:
+                        st.session_state[f"_col_t_{col}"] = False
+                    save_column_prefs([])
+                    st.rerun()
+            cols = st.columns(5)
+            for ci, (group_title, group_cols) in enumerate(COLUMN_GROUPS):
+                with cols[ci]:
+                    st.markdown(f"**{group_title}**")
+                    for col in group_cols:
+                        st.checkbox(
+                            col,
+                            value=col in st.session_state.visible_columns,
+                            key=f"_col_t_{col}",
+                            on_change=_toggle_col,
+                            args=(col,)
+                        )
+        
         raw_results = st.session_state.get("raw_results", [])
         
         if not raw_results:
