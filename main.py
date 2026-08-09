@@ -10,6 +10,8 @@ from streamlit.runtime.scriptrunner import get_script_run_ctx
 import json
 import os
 
+from st_aggrid import AgGrid, DataReturnMode, GridOptionsBuilder, JsCode
+
 PRESETS_FILE = "filter_presets.json"
 COLUMNS_FILE = "user_columns.json"
 PERSIST_PRESETS_KEY = "_presets_cache"
@@ -50,6 +52,155 @@ def _toggle_col(col):
         if col in st.session_state.visible_columns:
             st.session_state.visible_columns.remove(col)
     save_column_prefs(list(st.session_state.visible_columns))
+
+
+def _persist_grid_column_order(grid_response, visible_columns, is_percentage_mode):
+    """Persist a drag-and-drop column reorder back into saved column prefs."""
+    cols_state = getattr(grid_response, "columns_state", None)
+    if not cols_state:
+        return
+    display_ordered = resolve_visible_columns(visible_columns, is_percentage_mode)
+    disp2logical = dict(zip(display_ordered, visible_columns))
+    new_order = []
+    for state in cols_state:
+        if not isinstance(state, dict):
+            continue
+        logical = disp2logical.get(state.get("colId"))
+        if logical and logical not in new_order:
+            new_order.append(logical)
+    for logical in visible_columns:
+        if logical not in new_order:
+            new_order.append(logical)
+    if new_order != visible_columns:
+        st.session_state.visible_columns = new_order
+        save_column_prefs(list(new_order))
+        st.rerun()
+
+
+_RETURN_COLS = ("1D", "5D", "1M", "6M", "YTD", "1Y")
+
+
+def _render_table_fallback(df_display):
+    """Static st.dataframe rendering used if the AG Grid component is unavailable."""
+    pct_cols = [c for c in df_display.columns if 'SMA Dist' in c or 'ATH Dist' in c or c in _RETURN_COLS]
+
+    def _style_pct(v):
+        if pd.isna(v):
+            return ''
+        if v > 0:
+            return 'color: #089981;'
+        if v < 0:
+            return 'color: #f23645;'
+        return 'color: #d1d4dc;'
+
+    styled = (df_display.style.map if hasattr(df_display.style, "map") else df_display.style.applymap)(_style_pct, subset=pct_cols)
+
+    col_config = {}
+    for col in df_display.columns:
+        if col == "Price":
+            col_config[col] = st.column_config.NumberColumn(format="$%.2f")
+        elif col == "ATR%":
+            col_config[col] = st.column_config.NumberColumn(format="%.2f%%")
+        elif col in _RETURN_COLS:
+            col_config[col] = st.column_config.NumberColumn(format="%+.2f%%")
+        elif "SMA Dist" in col or "ATH Dist" in col:
+            col_config[col] = st.column_config.NumberColumn(format="%+.2f%%")
+        elif col == "ATH":
+            col_config[col] = st.column_config.NumberColumn(format="$%.2f")
+        elif "SMA" in col:
+            col_config[col] = st.column_config.NumberColumn(format="$%.2f")
+
+    nrows = len(df_display)
+    table_height = max(50, min(600, 38 + nrows * 37))
+    st.dataframe(
+        styled,
+        column_config=col_config,
+        height=table_height,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+def render_watchlist_grid(df_display, visible_columns, is_percentage_mode):
+    """Render the drag-to-reorder AG Grid, falling back to a static table if unavailable."""
+    st.caption("↔️ Drag the column headers to reorder them — your order is saved.")
+
+    _fmt_dollar = JsCode("""
+        function(params) {
+            const v = params.value;
+            if (v === null || v === undefined || v === '') return '';
+            return '$' + Number(v).toFixed(2);
+        }
+    """)
+    _fmt_plain_pct = JsCode("""
+        function(params) {
+            const v = params.value;
+            if (v === null || v === undefined || v === '') return '';
+            return Number(v).toFixed(2) + '%';
+        }
+    """)
+    _fmt_signed_pct = JsCode("""
+        function(params) {
+            const v = params.value;
+            if (v === null || v === undefined || v === '') return '';
+            const n = Number(v);
+            return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+        }
+    """)
+    _style_pct_cell = JsCode("""
+        function(params) {
+            const v = params.value;
+            if (v > 0) return { color: '#089981' };
+            if (v < 0) return { color: '#f23645' };
+            return { color: '#d1d4dc' };
+        }
+    """)
+
+    try:
+        gb = GridOptionsBuilder.from_dataframe(df_display)
+        gb.configure_default_column(sortable=True, resizable=True, filter=True)
+        gb.configure_pagination(paginationAutoPageSize=True)
+        gb.configure_selection(selection_mode="disabled")
+        gb.configure_grid_options(
+            suppressFieldDotNotation=True,
+            alwaysShowHorizontalScroll=True,
+        )
+
+        for col in df_display.columns:
+            if col == "Price" or col == "ATH":
+                gb.configure_column(col, valueFormatter=_fmt_dollar, minWidth=95)
+            elif col == "ATR%":
+                gb.configure_column(col, valueFormatter=_fmt_plain_pct, minWidth=85)
+            elif col in _RETURN_COLS or "Dist" in col:
+                gb.configure_column(col, valueFormatter=_fmt_signed_pct, cellStyle=_style_pct_cell, minWidth=95)
+            elif "SMA" in col:
+                gb.configure_column(col, valueFormatter=_fmt_dollar, minWidth=95)
+            else:
+                gb.configure_column(col, minWidth=120)
+
+        grid_options = gb.build()
+        nrows = len(df_display)
+        table_height = max(50, min(600, 38 + nrows * 37))
+
+        grid_response = AgGrid(
+            df_display,
+            gridOptions=grid_options,
+            height=table_height,
+            theme="streamlit",
+            update_on=["columnMoved"],
+            data_return_mode=DataReturnMode.AS_INPUT,
+            key=f"watchlist_grid_{'pct' if is_percentage_mode else 'dol'}",
+            allow_unsafe_jscode=True,
+            show_toolbar=False,
+            show_download_button=False,
+            show_search=False,
+        )
+    except Exception as e:
+        st.warning(f"⚠️ Interactive grid unavailable ({e}); showing static table instead.")
+        _render_table_fallback(df_display)
+        return
+
+    _persist_grid_column_order(grid_response, visible_columns, is_percentage_mode)
 
 # =====================================================================
 # CACHED DATA FETCHING LAYER
@@ -615,6 +766,8 @@ def run_streamlit_app():
             background: initial !important; color: initial !important;
             border-radius: initial !important; font-size: initial !important;
         }
+        div[data-testid="stPopoverBody"] { min-width: 90vw !important; }
+        div[data-testid="stPopoverBody"] button p { white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
     </style>
     """, unsafe_allow_html=True)
     
@@ -680,14 +833,14 @@ def run_streamlit_app():
                     except Exception:
                         pass
 
-    # Auto-load favorite preset on first run
+    # Auto-load favorite preset on first run (skip columns — user_columns.json is the source of truth)
     if "_favorite_loaded" not in st.session_state:
         st.session_state._favorite_loaded = True
         presets = load_presets()
         fav = presets.get("_favorite")
         if fav and fav in presets:
             for k, v in presets[fav].items():
-                if not k.startswith("_"):
+                if not k.startswith("_") and k != "visible_columns":
                     try:
                         st.session_state[k] = v
                     except Exception:
@@ -1090,9 +1243,8 @@ def run_streamlit_app():
                             on_change=_toggle_col,
                             args=(col,)
                         )
-        
         raw_results = st.session_state.get("raw_results", [])
-        
+
         if not raw_results:
             st.warning("⚠️ No stocks matched all filtering criteria.")
         else:
@@ -1104,53 +1256,20 @@ def run_streamlit_app():
             selected_cols = [c for c in selected_cols if c in df_display.columns]
             df_display = df_display[selected_cols].dropna(how='all')
 
-            pct_cols = [c for c in df_display.columns if 'SMA Dist' in c or 'ATH Dist' in c or c in ('1D', '5D', '1M', '6M', 'YTD', '1Y')]
+            if df_display.empty:
+                st.warning("⚠️ No visible columns selected.")
+            else:
+                render_watchlist_grid(df_display, visible_columns, is_percentage_mode)
 
-            # Conditional color coding for percentage columns
-            def _style_pct(v):
-                if pd.isna(v):
-                    return ''
-                if v > 0:
-                    return 'color: #089981;'
-                if v < 0:
-                    return 'color: #f23645;'
-                return 'color: #d1d4dc;'
-
-            styled = (df_display.style.map if hasattr(df_display.style, "map") else df_display.style.applymap)(_style_pct, subset=pct_cols)
-
-            col_config = {}
-            for col in df_display.columns:
-                if col == "Price":
-                    col_config[col] = st.column_config.NumberColumn(format="$%.2f")
-                elif col == "ATR%":
-                    col_config[col] = st.column_config.NumberColumn(format="%.2f%%")
-                elif col in ("1D", "5D", "1M", "6M", "YTD", "1Y"):
-                    col_config[col] = st.column_config.NumberColumn(format="%+.2f%%")
-                elif "SMA Dist" in col or "ATH Dist" in col:
-                    col_config[col] = st.column_config.NumberColumn(format="%+.2f%%")
-                elif col == "ATH":
-                    col_config[col] = st.column_config.NumberColumn(format="$%.2f")
-                elif "SMA" in col:
-                    col_config[col] = st.column_config.NumberColumn(format="$%.2f")
-
-            nrows = len(df_display)
-            table_height = max(50, min(600, 38 + nrows * 37))
-            st.dataframe(
-                styled,
-                column_config=col_config,
-                height=table_height,
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            csv_data = df_display.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="📥 Export Current Watchlist as CSV",
-                data=csv_data,
-                file_name=f"sp500_watchlist_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+                csv_data = df_display.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Export Current Watchlist as CSV",
+                    data=csv_data,
+                    file_name=f"sp500_watchlist_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    key="watchlist_csv_download",
+                    use_container_width=True
+                )
     else:
         st.info("ℹ️ System Ready. Set your filters above, then click **RUN MARKET SCAN** to begin.")
 
