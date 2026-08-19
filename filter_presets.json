@@ -16,7 +16,7 @@
     "fund_years": "1",
     "min_ath": "",
     "max_ath": "",
-    "display_mode": "Absolute Prices ($)",
+    "display_mode": "Percentage Distance (%)",
     "sma_slope": "Rising",
     "sma_slope_period": "150",
     "visible_columns": [
@@ -24,8 +24,8 @@
       "Sector",
       "Price",
       "ATR%",
-      "ATH",
-      "Company Name"
+      "Company Name",
+      "ATH"
     ]
   },
   "_favorite": "Michu",
@@ -47,5 +47,6 @@
     "min_ath": "",
     "max_ath": "",
     "display_mode": "Percentage Distance (%)"
-  }
+  },
+  "_font_size": "Normal (15px)"
 }

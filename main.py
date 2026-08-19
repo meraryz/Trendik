@@ -54,6 +54,21 @@ def _toggle_col(col):
     save_column_prefs(list(st.session_state.visible_columns))
 
 
+FONT_SIZE_TAGS = ["Compact (13px)", "Normal (15px)", "Large (18px)"]
+FONT_SIZE_PX = {"Compact (13px)": 13, "Normal (15px)": 15, "Large (18px)": 18}
+
+
+def font_size_px():
+    tag = st.session_state.get("font_size_tag", "Normal (15px)")
+    return FONT_SIZE_PX.get(tag, 15)
+
+
+def _set_font_size():
+    presets = load_presets()
+    presets["_font_size"] = st.session_state.get("font_size_tag", "Normal (15px)")
+    save_presets(presets)
+
+
 def _persist_grid_column_order(grid_response, visible_columns, is_percentage_mode):
     """Persist a drag-and-drop column reorder back into saved column prefs."""
     cols_state = getattr(grid_response, "columns_state", None)
@@ -80,7 +95,7 @@ def _persist_grid_column_order(grid_response, visible_columns, is_percentage_mod
 _RETURN_COLS = ("1D", "5D", "1M", "6M", "YTD", "1Y")
 
 
-def _render_table_fallback(df_display):
+def _render_table_fallback(df_display, font_size_px=15):
     """Static st.dataframe rendering used if the AG Grid component is unavailable."""
     pct_cols = [c for c in df_display.columns if 'SMA Dist' in c or 'ATH Dist' in c or c in _RETURN_COLS]
 
@@ -112,6 +127,7 @@ def _render_table_fallback(df_display):
 
     nrows = len(df_display)
     table_height = max(50, min(600, 38 + nrows * 37))
+    styled = styled.set_properties(**{"font-size": f"{font_size_px}px"})
     st.dataframe(
         styled,
         column_config=col_config,
@@ -121,7 +137,7 @@ def _render_table_fallback(df_display):
     )
 
 
-def render_watchlist_grid(df_display, visible_columns, is_percentage_mode):
+def render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_size_px=15):
     """Render the drag-to-reorder AG Grid, falling back to a static table if unavailable."""
     st.caption("↔️ Drag the column headers to reorder them — your order is saved.")
 
@@ -194,10 +210,15 @@ def render_watchlist_grid(df_display, visible_columns, is_percentage_mode):
             show_toolbar=False,
             show_download_button=False,
             show_search=False,
+            custom_css={
+                "[class*='ag-theme-']": {
+                    "--ag-font-size": f"{font_size_px}px !important",
+                }
+            },
         )
     except Exception as e:
         st.warning(f"⚠️ Interactive grid unavailable ({e}); showing static table instead.")
-        _render_table_fallback(df_display)
+        _render_table_fallback(df_display, font_size_px)
         return
 
     _persist_grid_column_order(grid_response, visible_columns, is_percentage_mode)
@@ -1215,34 +1236,48 @@ def run_streamlit_app():
                 st.session_state.refresh_clicked = True
                 st.rerun()
             
-        with st.popover("👁️ Columns"):
-            bcol1, bcol2 = st.columns(2)
-            with bcol1:
-                if st.button("Select All", use_container_width=True, type="primary"):
-                    st.session_state.visible_columns = LOGICAL_COLUMNS[:]
-                    for col in LOGICAL_COLUMNS:
-                        st.session_state[f"_col_t_{col}"] = True
-                    save_column_prefs(LOGICAL_COLUMNS[:])
-                    st.rerun()
-            with bcol2:
-                if st.button("Unselect All", use_container_width=True, type="primary"):
-                    st.session_state.visible_columns = []
-                    for col in LOGICAL_COLUMNS:
-                        st.session_state[f"_col_t_{col}"] = False
-                    save_column_prefs([])
-                    st.rerun()
-            cols = st.columns(5)
-            for ci, (group_title, group_cols) in enumerate(COLUMN_GROUPS):
-                with cols[ci]:
-                    st.markdown(f"**{group_title}**")
-                    for col in group_cols:
-                        st.checkbox(
-                            col,
-                            value=col in st.session_state.visible_columns,
-                            key=f"_col_t_{col}",
-                            on_change=_toggle_col,
-                            args=(col,)
-                        )
+        col_sel, font_sel, _sel_spacer = st.columns([1, 1, 4])
+        with col_sel:
+            with st.popover("👁️ Columns"):
+                bcol1, bcol2 = st.columns(2)
+                with bcol1:
+                    if st.button("Select All", use_container_width=True, type="primary"):
+                        st.session_state.visible_columns = LOGICAL_COLUMNS[:]
+                        for col in LOGICAL_COLUMNS:
+                            st.session_state[f"_col_t_{col}"] = True
+                        save_column_prefs(LOGICAL_COLUMNS[:])
+                        st.rerun()
+                with bcol2:
+                    if st.button("Unselect All", use_container_width=True, type="primary"):
+                        st.session_state.visible_columns = []
+                        for col in LOGICAL_COLUMNS:
+                            st.session_state[f"_col_t_{col}"] = False
+                        save_column_prefs([])
+                        st.rerun()
+                cols = st.columns(5)
+                for ci, (group_title, group_cols) in enumerate(COLUMN_GROUPS):
+                    with cols[ci]:
+                        st.markdown(f"**{group_title}**")
+                        for col in group_cols:
+                            st.checkbox(
+                                col,
+                                value=col in st.session_state.visible_columns,
+                                key=f"_col_t_{col}",
+                                on_change=_toggle_col,
+                                args=(col,)
+                            )
+        with font_sel:
+            _presets_now = load_presets()
+            _font_tag = _presets_now.get("_font_size", "Normal (15px)")
+            _font_idx = FONT_SIZE_TAGS.index(_font_tag) if _font_tag in FONT_SIZE_TAGS else 1
+            st.selectbox(
+                "Table text size",
+                FONT_SIZE_TAGS,
+                index=_font_idx,
+                key="font_size_tag",
+                on_change=_set_font_size,
+                label_visibility="collapsed",
+            )
         raw_results = st.session_state.get("raw_results", [])
 
         if not raw_results:
@@ -1259,7 +1294,7 @@ def run_streamlit_app():
             if df_display.empty:
                 st.warning("⚠️ No visible columns selected.")
             else:
-                render_watchlist_grid(df_display, visible_columns, is_percentage_mode)
+                render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_size_px())
 
                 csv_data = df_display.to_csv(index=False).encode('utf-8')
                 st.download_button(
