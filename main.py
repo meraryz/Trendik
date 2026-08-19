@@ -89,7 +89,7 @@ def _persist_grid_column_order(grid_response, visible_columns, is_percentage_mod
     if new_order != visible_columns:
         st.session_state.visible_columns = new_order
         save_column_prefs(list(new_order))
-        st.rerun()
+        st.rerun(scope="fragment")
 
 
 _RETURN_COLS = ("1D", "5D", "1M", "6M", "YTD", "1Y")
@@ -141,6 +141,25 @@ def render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_
     """Render the drag-to-reorder AG Grid, falling back to a static table if unavailable."""
     st.caption("↔️ Drag the column headers to reorder them — your order is saved.")
 
+    # NOTE: AG Grid's own font-size CSS is applied via st.markdown, not via AgGrid's
+    # custom_css= kwarg. custom_css injects a <style> tag into document.head on each
+    # call but never removes the previous one, and appears to skip re-injecting a
+    # value it has already injected once before — so switching back to a previously
+    # used font size silently did nothing, leaving an older (unrelated) size still
+    # winning the CSS cascade. st.markdown's element is properly replaced by
+    # Streamlit on every rerun, so it can't accumulate stale rules the same way.
+    st.markdown(
+        f"""
+        <style>
+        [class*="ag-theme-"] .ag-cell,
+        [class*="ag-theme-"] .ag-header-cell-text {{
+            font-size: {font_size_px}px !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     _fmt_dollar = JsCode("""
         function(params) {
             const v = params.value;
@@ -180,6 +199,7 @@ def render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_
         gb.configure_grid_options(
             suppressFieldDotNotation=True,
             alwaysShowHorizontalScroll=True,
+            autoSizeStrategy={"type": "fitCellContents"},
         )
 
         for col in df_display.columns:
@@ -205,16 +225,11 @@ def render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_
             theme="streamlit",
             update_on=["columnMoved"],
             data_return_mode=DataReturnMode.AS_INPUT,
-            key=f"watchlist_grid_{'pct' if is_percentage_mode else 'dol'}",
+            key="watchlist_grid",
             allow_unsafe_jscode=True,
             show_toolbar=False,
             show_download_button=False,
             show_search=False,
-            custom_css={
-                "[class*='ag-theme-']": {
-                    "--ag-font-size": f"{font_size_px}px !important",
-                }
-            },
         )
     except Exception as e:
         st.warning(f"⚠️ Interactive grid unavailable ({e}); showing static table instead.")
@@ -1240,119 +1255,123 @@ def run_streamlit_app():
                 st.error(f"Engine Failure: {e}")
 
     # WATCHLIST RESULTS RENDERER
-    if st.session_state.get("scan_complete", False):
-        rcol1, rcol2, rcol3, rcol4, rcol5 = st.columns([2, 1, 1.5, 1.5, 1])
+    @st.fragment
+    def _render_results_section():
+        if st.session_state.get("scan_complete", False):
+            rcol1, rcol2, rcol3, rcol4, rcol5 = st.columns([2, 1, 1.5, 1.5, 1])
         
-        with rcol1:
-            st.markdown("#### 📋 Market Watchlist Results")
+            with rcol1:
+                st.markdown("#### 📋 Market Watchlist Results")
         
-        with rcol2:
-            count = len(st.session_state.get("raw_results", []))
-            num_cand = st.session_state.get("num_candidates", 0)
-            st.markdown(
-                f"<p style='font-size: 1.2rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>"
-                f"{num_cand} <span style='font-weight: 400; color: #787b86;'>candidates</span> "
-                f"→ {count} <span style='font-weight: 400; color: #787b86;'>matches</span></p>",
-                unsafe_allow_html=True
-            )
-        
-        with rcol3:
-            if "last_duration" in st.session_state:
+            with rcol2:
+                count = len(st.session_state.get("raw_results", []))
+                num_cand = st.session_state.get("num_candidates", 0)
                 st.markdown(
-                    f"<p style='font-size: 1rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>⏱️ Scan duration</p>"
-                    f"<p style='font-size: 1.5rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{st.session_state.last_duration:.1f}s</p>",
-                    unsafe_allow_html=True
-                )
-            if "last_scan_time" in st.session_state:
-                st.markdown(
-                    f"<p style='font-size: 0.85rem; color: #787b86; margin: 0; text-align: center;'>{st.session_state.last_scan_time}</p>",
+                    f"<p style='font-size: 1.2rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>"
+                    f"{num_cand} <span style='font-weight: 400; color: #787b86;'>candidates</span> "
+                    f"→ {count} <span style='font-weight: 400; color: #787b86;'>matches</span></p>",
                     unsafe_allow_html=True
                 )
         
-        with rcol4:
-            display_mode = st.radio(
-                "Display", ["Absolute Prices ($)", "Percentage Distance (%)"], index=0,
-                horizontal=True, key="display_mode",
-                help="Only affects Price column format. SMA and SMA Dist columns are always visible."
-            )
+            with rcol3:
+                if "last_duration" in st.session_state:
+                    st.markdown(
+                        f"<p style='font-size: 1rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>⏱️ Scan duration</p>"
+                        f"<p style='font-size: 1.5rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{st.session_state.last_duration:.1f}s</p>",
+                        unsafe_allow_html=True
+                    )
+                if "last_scan_time" in st.session_state:
+                    st.markdown(
+                        f"<p style='font-size: 0.85rem; color: #787b86; margin: 0; text-align: center;'>{st.session_state.last_scan_time}</p>",
+                        unsafe_allow_html=True
+                    )
         
-        with rcol5:
-            if st.button("🔄 Refresh", use_container_width=True):
-                st.cache_data.clear()
-                st.session_state.refresh_clicked = True
-                st.rerun()
+            with rcol4:
+                display_mode = st.radio(
+                    "Display", ["Absolute Prices ($)", "Percentage Distance (%)"], index=0,
+                    horizontal=True, key="display_mode",
+                    help="Only affects Price column format. SMA and SMA Dist columns are always visible."
+                )
+        
+            with rcol5:
+                if st.button("🔄 Refresh", use_container_width=True):
+                    st.cache_data.clear()
+                    st.session_state.refresh_clicked = True
+                    st.rerun()
             
-        col_sel, font_sel, _sel_spacer = st.columns([1, 1, 4])
-        with col_sel:
-            with st.popover("👁️ Columns"):
-                bcol1, bcol2 = st.columns(2)
-                with bcol1:
-                    if st.button("Select All", use_container_width=True, type="primary"):
-                        st.session_state.visible_columns = LOGICAL_COLUMNS[:]
-                        for col in LOGICAL_COLUMNS:
-                            st.session_state[f"_col_t_{col}"] = True
-                        save_column_prefs(LOGICAL_COLUMNS[:])
-                        st.rerun()
-                with bcol2:
-                    if st.button("Unselect All", use_container_width=True, type="primary"):
-                        st.session_state.visible_columns = []
-                        for col in LOGICAL_COLUMNS:
-                            st.session_state[f"_col_t_{col}"] = False
-                        save_column_prefs([])
-                        st.rerun()
-                cols = st.columns(5)
-                for ci, (group_title, group_cols) in enumerate(COLUMN_GROUPS):
-                    with cols[ci]:
-                        st.markdown(f"**{group_title}**")
-                        for col in group_cols:
-                            st.checkbox(
-                                col,
-                                value=col in st.session_state.visible_columns,
-                                key=f"_col_t_{col}",
-                                on_change=_toggle_col,
-                                args=(col,)
-                            )
-        with font_sel:
-            _presets_now = load_presets()
-            _font_tag = _presets_now.get("_font_size", "Normal (15px)")
-            _font_idx = FONT_SIZE_TAGS.index(_font_tag) if _font_tag in FONT_SIZE_TAGS else 1
-            st.selectbox(
-                "Table text size",
-                FONT_SIZE_TAGS,
-                index=_font_idx,
-                key="font_size_tag",
-                on_change=_set_font_size,
-                label_visibility="collapsed",
-            )
-        raw_results = st.session_state.get("raw_results", [])
-
-        if not raw_results:
-            st.warning("⚠️ No stocks matched all filtering criteria.")
-        else:
-            df_display = build_numeric_display_df(raw_results, display_mode)
-            is_percentage_mode = (display_mode == "Percentage Distance (%)")
-            visible_columns = list(st.session_state.get("visible_columns", LOGICAL_COLUMNS))
-
-            selected_cols = resolve_visible_columns(visible_columns, is_percentage_mode)
-            selected_cols = [c for c in selected_cols if c in df_display.columns]
-            df_display = df_display[selected_cols].dropna(how='all')
-
-            if df_display.empty:
-                st.warning("⚠️ No visible columns selected.")
-            else:
-                render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_size_px())
-
-                csv_data = df_display.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="📥 Export Current Watchlist as CSV",
-                    data=csv_data,
-                    file_name=f"sp500_watchlist_{time.strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    key="watchlist_csv_download",
-                    use_container_width=True
+            col_sel, font_sel, _sel_spacer = st.columns([1, 1, 4])
+            with col_sel:
+                with st.popover("👁️ Columns"):
+                    bcol1, bcol2 = st.columns(2)
+                    with bcol1:
+                        if st.button("Select All", use_container_width=True, type="primary"):
+                            st.session_state.visible_columns = LOGICAL_COLUMNS[:]
+                            for col in LOGICAL_COLUMNS:
+                                st.session_state[f"_col_t_{col}"] = True
+                            save_column_prefs(LOGICAL_COLUMNS[:])
+                            st.rerun(scope="fragment")
+                    with bcol2:
+                        if st.button("Unselect All", use_container_width=True, type="primary"):
+                            st.session_state.visible_columns = []
+                            for col in LOGICAL_COLUMNS:
+                                st.session_state[f"_col_t_{col}"] = False
+                            save_column_prefs([])
+                            st.rerun(scope="fragment")
+                    cols = st.columns(5)
+                    for ci, (group_title, group_cols) in enumerate(COLUMN_GROUPS):
+                        with cols[ci]:
+                            st.markdown(f"**{group_title}**")
+                            for col in group_cols:
+                                st.checkbox(
+                                    col,
+                                    value=col in st.session_state.visible_columns,
+                                    key=f"_col_t_{col}",
+                                    on_change=_toggle_col,
+                                    args=(col,)
+                                )
+            with font_sel:
+                _presets_now = load_presets()
+                _font_tag = _presets_now.get("_font_size", "Normal (15px)")
+                _font_idx = FONT_SIZE_TAGS.index(_font_tag) if _font_tag in FONT_SIZE_TAGS else 1
+                st.selectbox(
+                    "Table text size",
+                    FONT_SIZE_TAGS,
+                    index=_font_idx,
+                    key="font_size_tag",
+                    on_change=_set_font_size,
+                    label_visibility="collapsed",
                 )
-    else:
-        st.info("ℹ️ System Ready. Set your filters above, then click **RUN MARKET SCAN** to begin.")
+            raw_results = st.session_state.get("raw_results", [])
+
+            if not raw_results:
+                st.warning("⚠️ No stocks matched all filtering criteria.")
+            else:
+                df_display = build_numeric_display_df(raw_results, display_mode)
+                is_percentage_mode = (display_mode == "Percentage Distance (%)")
+                visible_columns = list(st.session_state.get("visible_columns", LOGICAL_COLUMNS))
+
+                selected_cols = resolve_visible_columns(visible_columns, is_percentage_mode)
+                selected_cols = [c for c in selected_cols if c in df_display.columns]
+                df_display = df_display[selected_cols].dropna(how='all')
+
+                if df_display.empty:
+                    st.warning("⚠️ No visible columns selected.")
+                else:
+                    render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_size_px())
+
+                    csv_data = df_display.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="📥 Export Current Watchlist as CSV",
+                        data=csv_data,
+                        file_name=f"sp500_watchlist_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="watchlist_csv_download",
+                        use_container_width=True
+                    )
+        else:
+            st.info("ℹ️ System Ready. Set your filters above, then click **RUN MARKET SCAN** to begin.")
+
+    _render_results_section()
 
 
 # =====================================================================
