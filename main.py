@@ -233,23 +233,30 @@ try:
 except Exception:
     _SSL_CONTEXT = ssl._create_unverified_context()
 
-def get_sp500_tickers():
-    """Acquires S&P 500 companies list with ticker, name, and sector from Wikipedia."""
+SP500_CACHE_FILE = "sp500_tickers_cache.json"
+SP500_MIN_EXPECTED = 400  # sanity floor; a real S&P 500 pull is always ~500
+
+
+def _fetch_sp500_from_wikipedia():
+    """Scrapes the current S&P 500 constituents table from Wikipedia. Raises on any
+    network failure or if the page no longer matches the expected table shape."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     headers = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
                       'AppleWebKit/537.36 (KHTML, like Gecko) '
                       'Chrome/120.0.0.0 Safari/537.36'
     }
-    
+
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, context=_SSL_CONTEXT) as response:
+    with urllib.request.urlopen(req, context=_SSL_CONTEXT, timeout=10) as response:
         html_content = response.read().decode('utf-8')
-    
+
     html_stream = io.StringIO(html_content)
     table = pd.read_html(html_stream)
-    df = table[0] 
-    
+    df = table[0]
+    if not {'Symbol', 'Security'}.issubset(df.columns):
+        raise ValueError("Wikipedia table columns changed — parser needs updating")
+
     sp500_data = {}
     for _, row in df.iterrows():
         clean_ticker = str(row['Symbol']).replace('.', '-')
@@ -257,8 +264,38 @@ def get_sp500_tickers():
             "name": str(row['Security']) if pd.notna(row.get('Security')) else "Unknown",
             "sector": str(row['GICS Sector']) if pd.notna(row.get('GICS Sector')) else "Unknown"
         }
-        
+
+    if len(sp500_data) < SP500_MIN_EXPECTED:
+        raise ValueError(f"Only parsed {len(sp500_data)} tickers — Wikipedia table likely changed format")
+
     return sp500_data
+
+
+def get_sp500_tickers():
+    """Acquires the S&P 500 constituents list, preferring a live Wikipedia fetch.
+    Falls back to the last known-good local cache (network failure, Wikipedia
+    downtime, or a page layout change breaking the parser) so the app keeps working.
+
+    Returns (sp500_data, source) where source is "live", "cache", or "cache_fallback"
+    ("cache_fallback" means the live fetch was attempted and failed).
+    """
+    try:
+        sp500_data = _fetch_sp500_from_wikipedia()
+        try:
+            with open(SP500_CACHE_FILE, "w") as f:
+                json.dump({"fetched_at": time.strftime("%d/%m/%Y %H:%M"), "data": sp500_data}, f)
+        except Exception:
+            pass  # caching is best-effort; a write failure shouldn't break the scan
+        return sp500_data, "live"
+    except Exception as live_error:
+        if os.path.exists(SP500_CACHE_FILE):
+            try:
+                with open(SP500_CACHE_FILE) as f:
+                    cached = json.load(f)
+                return cached["data"], f"cache_fallback:{cached.get('fetched_at', 'unknown date')}"
+            except Exception:
+                pass
+        raise live_error
 
 
 @st.cache_data(ttl=3600)  # Cache bulk pricing data for 1 hour
@@ -795,12 +832,21 @@ def run_streamlit_app():
     # Initialize Core Application State
     if "sp500_data" not in st.session_state or "sp500_tickers" not in st.session_state:
         try:
-            sp500_dict = get_sp500_tickers()
+            sp500_dict, sp500_source = get_sp500_tickers()
             st.session_state.sp500_data = sp500_dict
             st.session_state.sp500_tickers = list(sp500_dict.keys())
+            st.session_state.sp500_source = sp500_source
         except Exception as e:
             st.error(f"Failed to load S&P 500 Stock Tickers list: {e}")
             st.stop()
+
+    sp500_source = st.session_state.get("sp500_source", "live")
+    if sp500_source.startswith("cache_fallback"):
+        stale_date = sp500_source.split(":", 1)[1] if ":" in sp500_source else "unknown date"
+        st.warning(
+            f"⚠️ Couldn't reach Wikipedia for the current S&P 500 list — using a locally "
+            f"cached copy from {stale_date}. Ticker composition may be slightly out of date."
+        )
     
     if "visible_columns" not in st.session_state:
         saved = load_column_prefs()

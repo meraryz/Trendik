@@ -3,3 +3,4 @@ venv/
 __pycache__/
 *.pyc
 .env
+sp500_tickers_cache.json
