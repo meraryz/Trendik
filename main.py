@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 import json
 import os
+import pickle
 
 from st_aggrid import AgGrid, DataReturnMode, GridOptionsBuilder, JsCode
 
@@ -313,12 +314,49 @@ def get_sp500_tickers():
         raise live_error
 
 
+TECH_CACHE_FILE = "sp500_technical_cache.pkl"
+TECH_CACHE_TTL_SECONDS = 3600  # matches the in-memory st.cache_data ttl below
+
+
+def _load_technical_cache(tickers):
+    """Returns a disk-cached price_df for these exact tickers if it's still fresh,
+    else None. This exists because st.cache_data's cache lives only in the running
+    process's memory: a live Yahoo Finance fetch for ~500 tickers takes ~25s, and
+    every server restart would otherwise pay that cost again even minutes later."""
+    if not os.path.exists(TECH_CACHE_FILE):
+        return None
+    try:
+        with open(TECH_CACHE_FILE, "rb") as f:
+            cached = pickle.load(f)
+        if cached.get("tickers") != tickers:
+            return None
+        if time.time() - cached.get("fetched_at", 0) > TECH_CACHE_TTL_SECONDS:
+            return None
+        return cached["data"]
+    except Exception:
+        return None
+
+
+def _save_technical_cache(tickers, price_df):
+    try:
+        with open(TECH_CACHE_FILE, "wb") as f:
+            pickle.dump({"tickers": tickers, "fetched_at": time.time(), "data": price_df}, f)
+    except Exception:
+        pass  # caching is best-effort; a write failure shouldn't break the scan
+
+
 @st.cache_data(ttl=3600)  # Cache bulk pricing data for 1 hour
 def download_technical_data(tickers):
     """Downloads 1-year daily historical pricing timelines for all tickers."""
+    cached = _load_technical_cache(tickers)
+    if cached is not None:
+        return cached
+
     price_df = yf.download(tickers, period="1y", group_by='ticker', progress=False, threads=True)
     if not isinstance(price_df.columns, pd.MultiIndex):
         price_df.columns = pd.MultiIndex.from_product([price_df.columns, ['']])
+
+    _save_technical_cache(tickers, price_df)
     return price_df
 
 
@@ -1296,6 +1334,8 @@ def run_streamlit_app():
             with rcol5:
                 if st.button("🔄 Refresh", use_container_width=True):
                     st.cache_data.clear()
+                    if os.path.exists(TECH_CACHE_FILE):
+                        os.remove(TECH_CACHE_FILE)
                     st.session_state.refresh_clicked = True
                     st.rerun()
             
