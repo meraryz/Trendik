@@ -227,6 +227,7 @@ def render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_
             update_on=["columnMoved"],
             data_return_mode=DataReturnMode.AS_INPUT,
             key="watchlist_grid",
+            server_sync_strategy="server_wins",
             allow_unsafe_jscode=True,
             show_toolbar=False,
             show_download_button=False,
@@ -1202,6 +1203,19 @@ def run_streamlit_app():
         if st.button("🔄 Reset Filters", use_container_width=True, key="reset_filters"):
             st.session_state._reset_filters = True
             st.rerun()
+    with acol3:
+        # Rendered unconditionally (not inside the results fragment below) so this
+        # widget mounts on the app's very first run. A widget whose key is seeded to
+        # a non-default value (e.g. by the favorite-preset auto-load) but that only
+        # gets *created* for the first time on a later, interaction-triggered rerun
+        # visually defaults to its first option regardless of the true session_state
+        # value — a Streamlit rendering bug confirmed in isolation, unrelated to
+        # AG Grid or this app's own state handling.
+        st.segmented_control(
+            "Display", ["Absolute Prices ($)", "Percentage Distance (%)"],
+            default="Absolute Prices ($)", required=True, key="display_mode",
+            help="Only affects Price column format. SMA and SMA Dist columns are always visible."
+        )
     with acol4:
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
         run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
@@ -1325,10 +1339,11 @@ def run_streamlit_app():
                     )
         
             with rcol4:
-                display_mode = st.radio(
-                    "Display", ["Absolute Prices ($)", "Percentage Distance (%)"], index=0,
-                    horizontal=True, key="display_mode",
-                    help="Only affects Price column format. SMA and SMA Dist columns are always visible."
+                display_mode = st.session_state.get("display_mode", "Absolute Prices ($)")
+                st.markdown(
+                    f"<p style='font-size: 0.85rem; color: #787b86; margin: 0; text-align: center;'>Display</p>"
+                    f"<p style='font-size: 1rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{display_mode}</p>",
+                    unsafe_allow_html=True
                 )
         
             with rcol5:
