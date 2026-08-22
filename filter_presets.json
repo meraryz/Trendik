@@ -1,4 +1,6 @@
 {
+  "_favorite": "Michu",
+  "_font_size": "Normal (15px)",
   "Michu": {
     "sma50_chk": false,
     "sma100_chk": false,
@@ -20,33 +22,41 @@
     "sma_slope": "Rising",
     "sma_slope_period": "150",
     "visible_columns": [
+      "Company Name",
       "Ticker",
       "Sector",
       "Price",
       "ATR%",
-      "Company Name",
       "ATH"
     ]
   },
-  "_favorite": "Michu",
-  "michmich": {
-    "sma50_chk": true,
-    "sma100_chk": true,
+  "Aviad": {
+    "sma50_chk": false,
+    "sma100_chk": false,
     "sma150_chk": true,
-    "sma200_chk": false,
+    "sma200_chk": true,
     "alignment_chk": true,
     "min_atr_pct": "",
     "max_atr_pct": "",
-    "growth_target_sma": "50",
+    "growth_target_sma": "100",
     "sma_direction": "Above (Price > SMA)",
-    "min_sma_growth": "0",
-    "max_sma_growth": "5",
+    "min_sma_growth": "",
+    "max_sma_growth": "3",
     "fund_mode": "Disabled",
     "fund_rate": "",
     "fund_years": "1",
-    "min_ath": "",
+    "min_ath": "10",
     "max_ath": "",
-    "display_mode": "Percentage Distance (%)"
-  },
-  "_font_size": "Normal (15px)"
+    "display_mode": "Percentage Distance (%)",
+    "sma_slope": "Disabled",
+    "sma_slope_period": "150",
+    "visible_columns": [
+      "Company Name",
+      "Ticker",
+      "Sector",
+      "Price",
+      "ATR%",
+      "ATH"
+    ]
+  }
 }

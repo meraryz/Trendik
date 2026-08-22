@@ -17,11 +17,27 @@ PRESETS_FILE = "filter_presets.json"
 COLUMNS_FILE = "user_columns.json"
 PERSIST_PRESETS_KEY = "_presets_cache"
 
+# Shown to brand-new installs (no filter_presets.json yet) as a working starting point,
+# auto-favorited so it loads without the user needing to know presets exist.
+DEFAULT_PRESET_NAME = "Starter (Uptrend)"
+DEFAULT_PRESET = {
+    "sma150_chk": True,
+    "growth_target_sma": "150",
+    "sma_direction": "Above (Price > SMA)",
+    "min_sma_growth": "0",
+    "max_sma_growth": "10",
+    "sma_slope": "Rising",
+    "sma_slope_period": "150",
+    "max_ath": "20",
+}
+
 def load_presets():
     if PERSIST_PRESETS_KEY in st.session_state:
         return st.session_state[PERSIST_PRESETS_KEY]
     if not os.path.exists(PRESETS_FILE):
-        return {}
+        presets = {DEFAULT_PRESET_NAME: dict(DEFAULT_PRESET), "_favorite": DEFAULT_PRESET_NAME}
+        save_presets(presets)
+        return presets
     with open(PRESETS_FILE) as f:
         presets = json.load(f)
     st.session_state[PERSIST_PRESETS_KEY] = presets
@@ -31,6 +47,31 @@ def save_presets(presets):
     with open(PRESETS_FILE, "w") as f:
         json.dump(presets, f, indent=2)
     st.session_state[PERSIST_PRESETS_KEY] = presets
+
+def _current_filter_state():
+    """Snapshot the live filter widgets into a preset-shaped dict (used by Save and Update)."""
+    return {
+        "sma50_chk": st.session_state.sma50_chk,
+        "sma100_chk": st.session_state.sma100_chk,
+        "sma150_chk": st.session_state.sma150_chk,
+        "sma200_chk": st.session_state.sma200_chk,
+        "alignment_chk": st.session_state.alignment_chk,
+        "min_atr_pct": st.session_state.min_atr_pct,
+        "max_atr_pct": st.session_state.max_atr_pct,
+        "growth_target_sma": st.session_state.growth_target_sma,
+        "sma_direction": st.session_state.sma_direction,
+        "min_sma_growth": st.session_state.min_sma_growth,
+        "max_sma_growth": st.session_state.max_sma_growth,
+        "fund_mode": st.session_state.fund_mode,
+        "fund_rate": st.session_state.fund_rate,
+        "fund_years": st.session_state.fund_years,
+        "min_ath": st.session_state.min_ath,
+        "max_ath": st.session_state.max_ath,
+        "display_mode": st.session_state.display_mode,
+        "sma_slope": st.session_state.get("sma_slope", "Disabled"),
+        "sma_slope_period": st.session_state.get("sma_slope_period", "50"),
+        "visible_columns": st.session_state.visible_columns,
+    }
 
 def load_column_prefs():
     if not os.path.exists(COLUMNS_FILE):
@@ -765,7 +806,49 @@ def run_streamlit_app():
         div[data-testid="stExpander"] div[data-baseweb="select"] > div {
             min-height: 1.5rem !important;
         }
-        
+
+        /* Keep the Presets popover panel compact instead of spanning the page.
+           Popover panels render in a portal appended to <body>, detached from
+           their trigger's position in the tree, so they can't be scoped by
+           ancestry — :has() with a marker element is the only way to target
+           just this one popover instead of every stPopoverBody on the page. */
+        div[data-testid="stPopoverBody"]:has(#presets-popover-marker) {
+            width: 340px !important;
+            min-width: 340px !important;
+        }
+        /* Same technique for each preset's ⋮ management menu — without this it
+           inherits the min-width: 90vw catch-all below meant for other popovers. */
+        div[data-testid="stPopoverBody"]:has(.preset-menu-marker) {
+            width: 220px !important;
+            min-width: 220px !important;
+        }
+        div[data-testid="stPopoverBody"]:has(.preset-menu-marker) button[kind="secondary"] {
+            background: #2a2e39 !important; color: #d1d4dc !important;
+            border: 1px solid #363a45 !important; border-radius: 6px !important;
+            font-size: 0.85rem !important; height: 34px !important; line-height: 1 !important;
+            width: 100% !important;
+        }
+        div[data-testid="stPopoverBody"]:has(.preset-menu-marker) button[kind="secondary"]:hover {
+            background: #363a45 !important; color: #ffffff !important; border-color: #2962ff !important;
+        }
+        /* The preset menu trigger: an icon-only, borderless (type="tertiary")
+           popover button — distinguished from labeled ones like "Presets"/
+           "Columns" by the absence of stMarkdownContainer. It shows a single
+           down-caret like a plain dropdown toggle, so Streamlit's own
+           auto-added expand_more chevron (which would otherwise duplicate our
+           icon and get stacked underneath it) is hidden. */
+        button[data-testid="stPopoverButton"]:not(:has([data-testid="stMarkdownContainer"])) {
+            width: 32px !important; min-width: 32px !important; height: 32px !important;
+            padding: 0 !important; border-radius: 6px !important;
+            background: transparent !important; border: none !important;
+        }
+        button[data-testid="stPopoverButton"]:not(:has([data-testid="stMarkdownContainer"])):hover {
+            background: rgba(255, 255, 255, 0.08) !important;
+        }
+        button[data-testid="stPopoverButton"]:not(:has([data-testid="stMarkdownContainer"])) div[aria-hidden="true"] {
+            display: none !important;
+        }
+
         /* Custom typography and brand coloring */
         h1, h2, h3, h4, h5, h6 {
             color: #2962ff !important;
@@ -915,6 +998,17 @@ def run_streamlit_app():
     if toast_msg:
         st.toast(toast_msg)
 
+    # Restore the Display toggle if it got wiped: any button below (Minimize,
+    # Update, Delete, Favorite, ...) sets state then calls st.rerun() *before*
+    # the segmented_control's own line ever executes that run — Streamlit aborts
+    # that run at the st.rerun() call, so it never "sees" the display_mode widget
+    # get created and garbage-collects its session_state entry. The next run then
+    # starts with the key missing and the widget falls back to its literal
+    # default, silently discarding whatever the user had selected. A sticky copy
+    # (refreshed right after the widget renders, see below) survives that gap.
+    if "display_mode" not in st.session_state and "_display_mode_sticky" in st.session_state:
+        st.session_state.display_mode = st.session_state._display_mode_sticky
+
     # Apply pending reset before any widgets render
     if st.session_state.pop("_reset_filters", False):
         st.session_state.sma50_chk = False
@@ -969,11 +1063,24 @@ def run_streamlit_app():
             st.session_state._active_preset = fav
     
     # --- TITLE ---
-    st.markdown(
-        "<h2 style='text-align: left; margin-bottom: 0; color: #2962ff;'>Trendik</h2>"
-        "<p style='text-align: left; font-size: 0.85rem; color: #787b86; margin-top: 0;'>Find the perfect stocks for you.</p>",
-        unsafe_allow_html=True
-    )
+    ttitle, thelp, tspacer = st.columns([1, 0.15, 5])
+    with ttitle:
+        st.markdown(
+            "<h2 style='text-align: left; margin-bottom: 0; color: #2962ff;'>Trendik</h2>"
+            "<p style='text-align: left; font-size: 0.85rem; color: #787b86; margin-top: 0;'>Find the perfect stocks for you.</p>",
+            unsafe_allow_html=True
+        )
+    with thelp:
+        st.markdown("<div style='padding-top: 0.6rem;'></div>", unsafe_allow_html=True)
+        st.button(
+            "", icon=":material/help:", type="tertiary", key="onboarding_help_btn", help=(
+                "New here? Trendik scans the S&P 500 for stocks matching the filters below "
+                "(Technical, Relative Position, Fundamentals, Distance to ATH) — hover any "
+                "❓ icon to see what a field does. A starter preset is loaded to get you "
+                "going; tweak it, click RUN MARKET SCAN, then save your own setup from "
+                "Filter Presets once you're happy with it."
+            )
+        )
 
     # --- HORIZONTAL FILTER PANE ---
     filters_expanded = not st.session_state.get("filters_minimized", False)
@@ -984,43 +1091,39 @@ def run_streamlit_app():
     fav = all_presets.get("_favorite", "")
     active = st.session_state.get("_active_preset", "")
     
-    preshow, prespacer = st.columns([1, 5])
-    with preshow:
-        with st.popover("💾 Presets", use_container_width=False):
+    ptitle, ppopover, phelp, prespacer = st.columns([1, 0.5, 0.2, 4.3])
+    with ptitle:
+        st.markdown("<div style='padding-top: 0.4rem;'><b>Filter Presets</b></div>", unsafe_allow_html=True)
+    with phelp:
+        st.button(
+            "", icon=":material/help:", type="tertiary", key="presets_help_btn", help=(
+                "Save your current filter settings under a name so you can reload them "
+                "instantly later, instead of re-entering every field each time. Click a "
+                "saved preset below to load it, or ⭐ favorite one to have it load "
+                "automatically the next time you open the app."
+            )
+        )
+    with ppopover:
+        with st.popover("💾 Presets", key="presets_popover"):
+            st.markdown('<span id="presets-popover-marker"></span>', unsafe_allow_html=True)
             presets = load_presets()
             pcol1, pcol2 = st.columns([2, 1])
             with pcol1:
                 preset_name = st.text_input("Preset name", key="preset_name", label_visibility="collapsed", placeholder="Name your preset...")
             with pcol2:
-                if st.button("💾 Save", use_container_width=True):
+                if st.button("💾 Save", use_container_width=True, help="Save the current filter settings as a new preset with this name."):
                     if preset_name.strip():
-                        presets[preset_name.strip()] = {
-                            "sma50_chk": st.session_state.sma50_chk,
-                            "sma100_chk": st.session_state.sma100_chk,
-                            "sma150_chk": st.session_state.sma150_chk,
-                            "sma200_chk": st.session_state.sma200_chk,
-                            "alignment_chk": st.session_state.alignment_chk,
-                            "min_atr_pct": st.session_state.min_atr_pct,
-                            "max_atr_pct": st.session_state.max_atr_pct,
-                            "growth_target_sma": st.session_state.growth_target_sma,
-                            "sma_direction": st.session_state.sma_direction,
-                            "min_sma_growth": st.session_state.min_sma_growth,
-                            "max_sma_growth": st.session_state.max_sma_growth,
-                            "fund_mode": st.session_state.fund_mode,
-                            "fund_rate": st.session_state.fund_rate,
-                            "fund_years": st.session_state.fund_years,
-                            "min_ath": st.session_state.min_ath,
-                            "max_ath": st.session_state.max_ath,
-                            "display_mode": st.session_state.display_mode,
-                            "sma_slope": st.session_state.get("sma_slope", "Disabled"),
-                            "sma_slope_period": st.session_state.get("sma_slope_period", "50"),
-                            "visible_columns": st.session_state.visible_columns,
-                        }
+                        presets[preset_name.strip()] = _current_filter_state()
                         save_presets(presets)
                         st.session_state._preset_toast = f"✅ Saved '{preset_name.strip()}'"
                         st.rerun()
 
     if preset_names:
+        st.caption(
+            "Click a preset to load its filters — click it again to deselect. Use a "
+            "preset's ⋮ menu for Favorite / Rename / Update / Delete. ⭐ marks the "
+            "preset that auto-loads on startup."
+        )
         n = len(preset_names)
         if n < 7:
             cols = [1] * n + [7 - n]
@@ -1033,61 +1136,67 @@ def run_streamlit_app():
                 is_fav = (pname == fav)
                 star = "⭐ " if is_fav else "☆ "
                 label = star + pname
-                if st.button(label, use_container_width=True, key=f"preset_box_{pname}", type="primary" if is_selected else "secondary"):
-                    if not is_selected:
-                        st.session_state._load_preset_name = pname
-                        st.session_state._active_preset = pname
-                    else:
-                        st.session_state._active_preset = ""
-                    st.rerun()
+                btn_help = f"{'Deselect' if is_selected else 'Load'} the '{pname}' preset" + (" (auto-loads on startup)" if is_fav else "")
 
-        if active and active in all_presets:
-            is_fav = (active == fav)
-            acol1, acol2, acol3, acol4 = st.columns([1, 1, 1, 4])
-            with acol1:
-                if st.button("☆ Set Favorite" if not is_fav else "⭐ Unfavorite", use_container_width=True, key="set_fav_btn"):
-                    presets = load_presets()
-                    presets["_favorite"] = active if not is_fav else ""
-                    save_presets(presets)
-                    st.rerun()
-            with acol2:
-                if st.button("🔄 Update", use_container_width=True, key="update_btn"):
-                    presets = load_presets()
-                    presets[active] = {
-                        "sma50_chk": st.session_state.sma50_chk,
-                        "sma100_chk": st.session_state.sma100_chk,
-                        "sma150_chk": st.session_state.sma150_chk,
-                        "sma200_chk": st.session_state.sma200_chk,
-                        "alignment_chk": st.session_state.alignment_chk,
-                        "min_atr_pct": st.session_state.min_atr_pct,
-                        "max_atr_pct": st.session_state.max_atr_pct,
-                        "growth_target_sma": st.session_state.growth_target_sma,
-                        "sma_direction": st.session_state.sma_direction,
-                        "min_sma_growth": st.session_state.min_sma_growth,
-                        "max_sma_growth": st.session_state.max_sma_growth,
-                        "fund_mode": st.session_state.fund_mode,
-                        "fund_rate": st.session_state.fund_rate,
-                        "fund_years": st.session_state.fund_years,
-                        "min_ath": st.session_state.min_ath,
-                        "max_ath": st.session_state.max_ath,
-                        "display_mode": st.session_state.display_mode,
-                        "sma_slope": st.session_state.get("sma_slope", "Disabled"),
-                        "sma_slope_period": st.session_state.get("sma_slope_period", "50"),
-                        "visible_columns": st.session_state.visible_columns,
-                    }
-                    save_presets(presets)
-                    st.session_state._preset_toast = f"✅ Preset '{active}' updated"
-                    st.rerun()
-            with acol3:
-                if st.button("🗑️ Delete", use_container_width=True, key="delete_btn"):
-                    presets = load_presets()
-                    del presets[active]
-                    if active == fav:
-                        presets["_favorite"] = ""
-                    st.session_state._active_preset = ""
-                    save_presets(presets)
-                    st.rerun()
-    
+                bcol, mcol = st.columns([5, 1])
+                with bcol:
+                    if st.button(label, use_container_width=True, key=f"preset_box_{pname}", type="primary" if is_selected else "secondary", help=btn_help):
+                        if not is_selected:
+                            st.session_state._load_preset_name = pname
+                            st.session_state._active_preset = pname
+                        else:
+                            st.session_state._active_preset = ""
+                        st.rerun()
+                with mcol:
+                    with st.popover("", icon=":material/expand_more:", type="tertiary", width=240, key=f"preset_menu_{pname}", help=f"Manage the '{pname}' preset"):
+                        st.markdown('<span class="preset-menu-marker"></span>', unsafe_allow_html=True)
+                        st.markdown(f"**{pname}**")
+
+                        fav_help = "Stop auto-loading this preset on startup." if is_fav else "Auto-load this preset the next time you open the app."
+                        if st.button("⭐ Unfavorite" if is_fav else "☆ Set Favorite", key=f"fav_btn_{pname}", help=fav_help):
+                            presets = load_presets()
+                            presets["_favorite"] = "" if is_fav else pname
+                            save_presets(presets)
+                            st.rerun()
+
+                        new_name = st.text_input(
+                            "Rename to", value=pname, key=f"rename_input_{pname}",
+                            label_visibility="collapsed", placeholder="New name...", width=200
+                        )
+                        if st.button("✏️ Rename", key=f"rename_btn_{pname}", help=f"Rename '{pname}' to the text above."):
+                            new_name = new_name.strip()
+                            presets = load_presets()
+                            if not new_name or new_name.startswith("_"):
+                                st.session_state._preset_toast = "⚠️ Enter a valid preset name."
+                            elif new_name != pname and new_name in presets:
+                                st.session_state._preset_toast = f"⚠️ A preset named '{new_name}' already exists."
+                            elif new_name != pname:
+                                presets[new_name] = presets.pop(pname)
+                                if presets.get("_favorite") == pname:
+                                    presets["_favorite"] = new_name
+                                save_presets(presets)
+                                if st.session_state.get("_active_preset") == pname:
+                                    st.session_state._active_preset = new_name
+                                st.session_state._preset_toast = f"✅ Renamed '{pname}' to '{new_name}'"
+                            st.rerun()
+
+                        if st.button("🔄 Update", key=f"update_btn_{pname}", help=f"Overwrite '{pname}' with your current filter settings."):
+                            presets = load_presets()
+                            presets[pname] = _current_filter_state()
+                            save_presets(presets)
+                            st.session_state._preset_toast = f"✅ Preset '{pname}' updated"
+                            st.rerun()
+
+                        if st.button("🗑️ Delete", key=f"delete_btn_{pname}", help=f"Permanently delete the '{pname}' preset. This can't be undone."):
+                            presets = load_presets()
+                            del presets[pname]
+                            if pname == fav:
+                                presets["_favorite"] = ""
+                            if pname == active:
+                                st.session_state._active_preset = ""
+                            save_presets(presets)
+                            st.rerun()
+
     col_t, col_r, col_f, col_a = st.columns(4)
 
     with col_t:
@@ -1205,17 +1314,20 @@ def run_streamlit_app():
             st.rerun()
     with acol3:
         # Rendered unconditionally (not inside the results fragment below) so this
-        # widget mounts on the app's very first run. A widget whose key is seeded to
-        # a non-default value (e.g. by the favorite-preset auto-load) but that only
-        # gets *created* for the first time on a later, interaction-triggered rerun
-        # visually defaults to its first option regardless of the true session_state
-        # value — a Streamlit rendering bug confirmed in isolation, unrelated to
-        # AG Grid or this app's own state handling.
+        # widget mounts on the app's very first run — see the sticky-restore note
+        # near the top of this function for why a plain `key=` isn't enough to
+        # keep this widget's value alive across every button click in this panel.
+        display_kwargs = {} if "display_mode" in st.session_state else {"default": "Absolute Prices ($)"}
         st.segmented_control(
             "Display", ["Absolute Prices ($)", "Percentage Distance (%)"],
-            default="Absolute Prices ($)", required=True, key="display_mode",
-            help="Only affects Price column format. SMA and SMA Dist columns are always visible."
+            required=True, key="display_mode",
+            help="Only affects Price column format. SMA and SMA Dist columns are always visible.",
+            **display_kwargs
         )
+        # Refresh the sticky shadow copy now that this run actually reached the
+        # widget, so the next aborted run (any button above that calls
+        # st.rerun()) has something to restore from.
+        st.session_state._display_mode_sticky = st.session_state.display_mode
     with acol4:
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
         run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
