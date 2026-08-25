@@ -197,6 +197,31 @@ def render_watchlist_grid(df_display, visible_columns, is_percentage_mode, font_
         [class*="ag-theme-"] .ag-header-cell-text {{
             font-size: {font_size_px}px !important;
         }}
+        /* Card frame + refined header/zebra rows so the grid reads as one
+           polished panel instead of AG Grid's plain default chrome. */
+        [class*="ag-theme-"] {{
+            border-radius: 10px !important;
+            overflow: hidden;
+            border: 1px solid #262b38 !important;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28) !important;
+        }}
+        [class*="ag-theme-"] .ag-header {{
+            background: linear-gradient(180deg, #1c212e 0%, #161b26 100%) !important;
+            border-bottom: 1px solid #2962ff33 !important;
+        }}
+        [class*="ag-theme-"] .ag-header-cell-text {{
+            font-weight: 700 !important;
+            letter-spacing: 0.02em;
+        }}
+        [class*="ag-theme-"] .ag-row {{
+            transition: background-color 0.1s ease;
+        }}
+        [class*="ag-theme-"] .ag-row-odd {{
+            background-color: rgba(255, 255, 255, 0.015) !important;
+        }}
+        [class*="ag-theme-"] .ag-row-hover {{
+            background-color: rgba(41, 98, 255, 0.08) !important;
+        }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -744,15 +769,30 @@ def run_streamlit_app():
         initial_sidebar_state="collapsed"
     )
     
+    # Load the Inter typeface the CSS below already asks for by name — without this
+    # link every font-family: 'Inter' rule silently falls back to a default sans-serif.
+    st.markdown(
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">',
+        unsafe_allow_html=True,
+    )
+
     # Custom CSS Injector for Dark, High-Intensity Compact Aesthetic
     st.markdown("""
     <style>
-        /* Main application container background */
+        /* Main application container background — a faint blue glow anchored at the
+           top of the page adds depth to what was a single flat dark fill, without
+           drifting away from the terminal's near-black base color. */
         .stApp {
-            background-color: #131722 !important;
+            background:
+                radial-gradient(1100px 520px at 12% -8%, rgba(41, 98, 255, 0.10), transparent 60%),
+                radial-gradient(900px 480px at 100% 0%, rgba(8, 153, 129, 0.06), transparent 55%),
+                #131722 !important;
             color: #d1d4dc !important;
+            font-family: 'Inter', sans-serif !important;
         }
-        
+
         /* Tight compact layout padding adjustment */
         .block-container {
             padding-top: 1.5rem !important;
@@ -779,23 +819,43 @@ def run_streamlit_app():
             min-width: unset !important;
         }
         
+        /* Filter panel cards — give each expander (Technical, Relative Position, ...)
+           real card presence instead of blending flat into the page background. */
+        div[data-testid="stExpander"] {
+            background: linear-gradient(180deg, #171c28 0%, #141824 100%) !important;
+            border: 1px solid #262b38 !important;
+            border-radius: 10px !important;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28) !important;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            overflow: hidden;
+        }
+        /* Stat tiles in the results header (candidates→matches, scan duration, display). */
+        .stat-tile {
+            background: linear-gradient(180deg, #1a1f2b 0%, #161b26 100%);
+            border: 1px solid #262b38;
+            border-radius: 10px;
+            padding: 0.5rem 0.75rem;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        }
+        div[data-testid="stExpander"]:hover {
+            border-color: rgba(41, 98, 255, 0.45) !important;
+            box-shadow: 0 6px 20px rgba(41, 98, 255, 0.14) !important;
+        }
         /* Compact expander headers */
         details > summary {
             font-size: 0.8rem !important;
             font-weight: 600 !important;
-            padding: 0.15rem 0.3rem !important;
+            padding: 0.6rem 0.75rem !important;
+            border-bottom: 1px solid #262b38 !important;
         }
         .streamlit-expanderHeader {
             font-size: 0.8rem !important;
             padding: 0.15rem 0.3rem !important;
         }
         .streamlit-expanderContent {
-            padding: 0.2rem 0.1rem !important;
+            padding: 0.6rem 0.75rem !important;
         }
-        div[data-testid="stExpander"] {
-            border: none !important;
-        }
-        
+
         /* Compact checkboxes and inputs inside expanders */
         div[data-testid="stExpander"] label {
             font-size: 0.75rem !important;
@@ -857,6 +917,18 @@ def run_streamlit_app():
             margin-bottom: 0.2rem !important;
             font-weight: 700 !important;
         }
+        /* Brand wordmark — a plain <h2> would be caught by the color:#2962ff
+           !important rule above, which stomps the transparent fill this gradient
+           text-clip effect needs, so it's a bare div/class instead of a heading. */
+        .brand-title {
+            font-size: 2.1rem; font-weight: 800; letter-spacing: -0.02em; line-height: 1.15;
+            background: linear-gradient(90deg, #5b8def 0%, #2962ff 55%, #06c2a2 130%);
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+            margin: 0; font-family: 'Inter', sans-serif;
+        }
+        .brand-subtitle {
+            font-size: 0.9rem; color: #8b93a7; margin: 0.3rem 0 0 0; letter-spacing: 0.01em;
+        }
         
         /* Input and selectboxes styled cards */
         div[data-baseweb="select"] > div,
@@ -875,17 +947,33 @@ def run_streamlit_app():
             background-color: #089981 !important;
             color: #ffffff !important;
             border: none !important;
-            border-radius: 4px !important;
+            border-radius: 6px !important;
             padding: 0.6rem 1.5rem !important;
             font-weight: bold !important;
             font-size: 14px !important;
             width: 100% !important;
-            transition: background-color 0.2s ease;
+            box-shadow: 0 2px 8px rgba(8, 153, 129, 0.18);
+            transition: background-color 0.2s ease, transform 0.15s ease, box-shadow 0.15s ease;
         }
         .stButton > button:hover {
             background-color: #06c2a2 !important;
             color: #ffffff !important;
             border: none !important;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(8, 153, 129, 0.3);
+        }
+        .stButton > button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(8, 153, 129, 0.25);
+        }
+        /* Same tactile lift for the colored preset/action pills further down. */
+        button[kind="primary"], button[kind="secondary"] {
+            transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+        }
+        div[data-testid="stHorizontalBlock"] button[kind="primary"]:hover,
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
         }
         
         /* Metric values formatting */
@@ -1066,12 +1154,12 @@ def run_streamlit_app():
     ttitle, thelp, tspacer = st.columns([1, 0.15, 5])
     with ttitle:
         st.markdown(
-            "<h2 style='text-align: left; margin-bottom: 0; color: #2962ff;'>Trendik</h2>"
-            "<p style='text-align: left; font-size: 0.85rem; color: #787b86; margin-top: 0;'>Find the perfect stocks for you.</p>",
+            "<div class='brand-title'>Trendik</div>"
+            "<div class='brand-subtitle'>Find the perfect stocks for you.</div>",
             unsafe_allow_html=True
         )
     with thelp:
-        st.markdown("<div style='padding-top: 0.6rem;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='padding-top: 0.75rem;'></div>", unsafe_allow_html=True)
         st.button(
             "", icon=":material/help:", type="tertiary", key="onboarding_help_btn", help=(
                 "New here? Trendik scans the S&P 500 for stocks matching the filters below "
@@ -1431,30 +1519,35 @@ def run_streamlit_app():
                 count = len(st.session_state.get("raw_results", []))
                 num_cand = st.session_state.get("num_candidates", 0)
                 st.markdown(
-                    f"<p style='font-size: 1.2rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>"
+                    "<div class='stat-tile'>"
+                    f"<p style='font-size: 1.2rem; font-weight: 700; color: #2962ff; margin: 0; text-align: center;'>"
                     f"{num_cand} <span style='font-weight: 400; color: #787b86;'>candidates</span> "
-                    f"→ {count} <span style='font-weight: 400; color: #787b86;'>matches</span></p>",
+                    f"→ {count} <span style='font-weight: 400; color: #787b86;'>matches</span></p>"
+                    "</div>",
                     unsafe_allow_html=True
                 )
-        
+
             with rcol3:
+                duration_html = ""
                 if "last_duration" in st.session_state:
-                    st.markdown(
-                        f"<p style='font-size: 1rem; font-weight: 700; color: #2962ff; margin: 0.2rem 0 0 0; text-align: center;'>⏱️ Scan duration</p>"
-                        f"<p style='font-size: 1.5rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{st.session_state.last_duration:.1f}s</p>",
-                        unsafe_allow_html=True
+                    duration_html += (
+                        f"<p style='font-size: 1rem; font-weight: 700; color: #2962ff; margin: 0; text-align: center;'>⏱️ Scan duration</p>"
+                        f"<p style='font-size: 1.5rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{st.session_state.last_duration:.1f}s</p>"
                     )
                 if "last_scan_time" in st.session_state:
-                    st.markdown(
-                        f"<p style='font-size: 0.85rem; color: #787b86; margin: 0; text-align: center;'>{st.session_state.last_scan_time}</p>",
-                        unsafe_allow_html=True
+                    duration_html += (
+                        f"<p style='font-size: 0.85rem; color: #787b86; margin: 0.15rem 0 0 0; text-align: center;'>{st.session_state.last_scan_time}</p>"
                     )
-        
+                if duration_html:
+                    st.markdown(f"<div class='stat-tile'>{duration_html}</div>", unsafe_allow_html=True)
+
             with rcol4:
                 display_mode = st.session_state.get("display_mode", "Absolute Prices ($)")
                 st.markdown(
+                    "<div class='stat-tile'>"
                     f"<p style='font-size: 0.85rem; color: #787b86; margin: 0; text-align: center;'>Display</p>"
-                    f"<p style='font-size: 1rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{display_mode}</p>",
+                    f"<p style='font-size: 1rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{display_mode}</p>"
+                    "</div>",
                     unsafe_allow_html=True
                 )
         

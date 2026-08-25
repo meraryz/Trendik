@@ -26,6 +26,7 @@
       "Ticker",
       "Sector",
       "Price",
+      "SMA150",
       "ATR%",
       "ATH"
     ]
