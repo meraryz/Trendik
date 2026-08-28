@@ -21,7 +21,7 @@ PERSIST_PRESETS_KEY = "_presets_cache"
 # auto-favorited so it loads without the user needing to know presets exist.
 DEFAULT_PRESET_NAME = "Starter (Uptrend)"
 DEFAULT_PRESET = {
-    "sma150_chk": True,
+    "sma150_pos": "Above",
     "growth_target_sma": "150",
     "sma_direction": "Above (Price > SMA)",
     "min_sma_growth": "0",
@@ -29,6 +29,19 @@ DEFAULT_PRESET = {
     "sma_slope": "Rising",
     "sma_slope_period": "150",
     "max_ath": "20",
+}
+
+# The Technical panel's per-SMA filter is a single 3-state button (None/Above/
+# Below) per period rather than a plain "must be above" checkbox.
+SMA_PERIODS = [50, 100, 150, 200]
+SMA_POS_CYCLE = {"None": "Above", "Above": "Below", "Below": "None"}
+SMA_POS_DEFAULT = {50: "Above", 100: "None", 150: "None", 200: "None"}
+SMA_POS_ICON = {"None": "—", "Above": "↑", "Below": "↓"}
+SMA_POS_FLAVOR = {
+    50: "short-term momentum",
+    100: "medium-term strength",
+    150: "mid-to-long-term trend",
+    200: "the classic long-term bull/bear indicator",
 }
 
 def load_presets():
@@ -48,13 +61,24 @@ def save_presets(presets):
         json.dump(presets, f, indent=2)
     st.session_state[PERSIST_PRESETS_KEY] = presets
 
+def _migrate_sma_checkboxes(preset_dict):
+    """Old presets store each SMA as a plain True/False "must be above" checkbox
+    (smaXX_chk). The Technical panel now uses a single 3-state Above/Below/None
+    button per SMA (smaXX_pos) instead, so translate any old-format value the
+    first time such a preset is loaded — True becomes Above, False becomes None.
+    New-format presets already have smaXX_pos and are left untouched."""
+    for p in SMA_PERIODS:
+        old_key, new_key = f"sma{p}_chk", f"sma{p}_pos"
+        if new_key not in preset_dict and old_key in preset_dict:
+            st.session_state[new_key] = "Above" if preset_dict[old_key] else "None"
+
 def _current_filter_state():
     """Snapshot the live filter widgets into a preset-shaped dict (used by Save and Update)."""
     return {
-        "sma50_chk": st.session_state.sma50_chk,
-        "sma100_chk": st.session_state.sma100_chk,
-        "sma150_chk": st.session_state.sma150_chk,
-        "sma200_chk": st.session_state.sma200_chk,
+        "sma50_pos": st.session_state.get("sma50_pos", SMA_POS_DEFAULT[50]),
+        "sma100_pos": st.session_state.get("sma100_pos", SMA_POS_DEFAULT[100]),
+        "sma150_pos": st.session_state.get("sma150_pos", SMA_POS_DEFAULT[150]),
+        "sma200_pos": st.session_state.get("sma200_pos", SMA_POS_DEFAULT[200]),
         "alignment_chk": st.session_state.alignment_chk,
         "min_atr_pct": st.session_state.min_atr_pct,
         "max_atr_pct": st.session_state.max_atr_pct,
@@ -551,10 +575,14 @@ def run_scanner(
     # --- Vectorized Technical Filtering Stage ---
     passed_mask = current_prices.notna() & ath_prices.notna()
     
-    # 1. Price Above SMA filters
+    # 1. Price vs. SMA filters — each period is independently "None" (skip),
+    # "Above", or "Below".
     for p in sma_periods:
-        if sma_selections[p]:
+        sel = sma_selections.get(p, "None")
+        if sel == "Above":
             passed_mask &= (current_prices > smas_matrix[p])
+        elif sel == "Below":
+            passed_mask &= (current_prices < smas_matrix[p])
     
     # 2. SMA Alignment filter (50 > 100 > 150 > 200)
     if alignment_enabled:
@@ -1176,10 +1204,10 @@ def run_streamlit_app():
 
     # Apply pending reset before any widgets render
     if st.session_state.pop("_reset_filters", False):
-        st.session_state.sma50_chk = False
-        st.session_state.sma100_chk = False
-        st.session_state.sma150_chk = False
-        st.session_state.sma200_chk = False
+        st.session_state.sma50_pos = SMA_POS_DEFAULT[50]
+        st.session_state.sma100_pos = SMA_POS_DEFAULT[100]
+        st.session_state.sma150_pos = SMA_POS_DEFAULT[150]
+        st.session_state.sma200_pos = SMA_POS_DEFAULT[200]
         st.session_state.alignment_chk = False
         st.session_state.min_atr_pct = ""
         st.session_state.max_atr_pct = ""
@@ -1212,6 +1240,7 @@ def run_streamlit_app():
                         st.session_state[k] = v
                     except Exception:
                         pass
+            _migrate_sma_checkboxes(presets[preset_name])
 
     # Auto-load favorite preset on first run (skip columns — user_columns.json is the source of truth)
     if "_favorite_loaded" not in st.session_state:
@@ -1225,6 +1254,7 @@ def run_streamlit_app():
                         st.session_state[k] = v
                     except Exception:
                         pass
+            _migrate_sma_checkboxes(presets[fav])
             st.session_state._active_preset = fav
     
     # --- TITLE ---
@@ -1366,22 +1396,37 @@ def run_streamlit_app():
 
     with col_t:
         with st.expander("Technical", icon=":material/show_chart:", expanded=filters_expanded):
-            sma50_chk = st.checkbox(
-                "Above 50-Day SMA", value=True, key="sma50_chk",
-                help="Turn on to only show stocks currently trading above their 50-day average — catches short-term momentum."
-            )
-            sma100_chk = st.checkbox(
-                "Above 100-Day SMA", value=False, key="sma100_chk",
-                help="Add the 100-day filter to confirm the stock has medium-term bullish strength behind it."
-            )
-            sma150_chk = st.checkbox(
-                "Above 150-Day SMA", value=False, key="sma150_chk",
-                help="Enables a mid-to-long-term trend filter. Best for investors looking for sustained upward moves."
-            )
-            sma200_chk = st.checkbox(
-                "Above 200-Day SMA", value=False, key="sma200_chk",
-                help="The classic bull-market indicator. Stocks above their 200-day average are considered in a long-term uptrend."
-            )
+            # Each SMA is a single 3-state button instead of an "above only"
+            # checkbox — click cycles None → Above → Below → None. The button's
+            # own key only tracks the click event; sma{p}_pos (a plain
+            # session_state value, not a widget key) holds the actual state so
+            # it survives reruns and round-trips through presets.
+            sma_selections = {}
+            sma_cols = st.columns(4)
+            for period, sma_col in zip(SMA_PERIODS, sma_cols):
+                with sma_col:
+                    st.markdown(
+                        f"<div style='text-align:center; font-size:0.8rem; "
+                        f"color:#8b93a7; margin-bottom:0.25rem;'>{period}-Day</div>",
+                        unsafe_allow_html=True
+                    )
+                    pos_key = f"sma{period}_pos"
+                    current_pos = st.session_state.get(pos_key, SMA_POS_DEFAULT[period])
+                    sma_selections[period] = current_pos
+                    if st.button(
+                        f"{SMA_POS_ICON[current_pos]} {current_pos}",
+                        key=f"{pos_key}_btn", use_container_width=True,
+                        type="primary" if current_pos != "None" else "secondary",
+                        help=(
+                            f"Currently **{current_pos}**\n"
+                            "- Click to cycle: None → Above → Below → None\n"
+                            f"- **Above** — price must be over its {period}-day average "
+                            f"({SMA_POS_FLAVOR[period]})\n"
+                            "- **Below** — price must be under it"
+                        )
+                    ):
+                        st.session_state[pos_key] = SMA_POS_CYCLE[current_pos]
+                        st.rerun()
             alignment_chk = st.checkbox(
                 "Bullish Alignment (50>100>150>200)", value=False, key="alignment_chk",
                 help=(
@@ -1571,13 +1616,8 @@ def run_streamlit_app():
         validation_error = f"⚠️ {str(e)}"
         can_run_scan = False
 
-    # Pack selected checkboxed variables
-    sma_selections = {
-        50: sma50_chk,
-        100: sma100_chk,
-        150: sma150_chk,
-        200: sma200_chk
-    }
+    # sma_selections (period -> "None"/"Above"/"Below") was already built above
+    # while rendering the Technical panel's per-SMA buttons.
     is_above_mode = ("Above" in sma_direction)
 
     # --- MAIN SCREEN INTERFACE ---
