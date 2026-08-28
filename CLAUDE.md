@@ -89,3 +89,8 @@ Everything lives in `main.py`, organized top-to-bottom into clearly commented se
 - Widget `key=` strings are the actual state contract (presets save/restore by these exact keys)
   — renaming a widget's `key` breaks every saved preset in `filter_presets.json` unless you
   migrate them.
+- `help=` tooltip text: if a tooltip conveys a single continuous idea, keep it as one short
+  sentence (a lone bullet adds nothing). If it conveys 2+ distinct facts — definition + example,
+  enumerated option meanings, multi-step instructions — format it as short Markdown bullets
+  (`"- point one\n- point two"`) instead of a run-on paragraph; `st.button`/widget `help=` strings
+  render GitHub-flavored Markdown. This applies to every tooltip in the app, not just presets.

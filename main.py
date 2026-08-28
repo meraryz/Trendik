@@ -867,6 +867,21 @@ def run_streamlit_app():
             min-height: 1.5rem !important;
         }
 
+        /* The main onboarding "?" next to the Trendik title — bigger than the
+           small inline help icons scattered next to individual fields, since
+           it's the primary "what is this app" entry point. Both this button
+           and the Presets help button share the same tertiary/icon-only
+           button type with no other DOM hook to tell them apart, so a hidden
+           marker + :has() (same technique used for the popovers below) scopes
+           the size bump to just this one. */
+        div[data-testid="stColumn"]:has(#trendik-help-marker) button[data-testid="stBaseButton-tertiary"] {
+            width: 40px !important;
+            height: 44px !important;
+        }
+        div[data-testid="stColumn"]:has(#trendik-help-marker) button[data-testid="stBaseButton-tertiary"] [data-testid="stIconMaterial"] {
+            font-size: 32px !important;
+        }
+
         /* Keep the Presets popover panel compact instead of spanning the page.
            Popover panels render in a portal appended to <body>, detached from
            their trigger's position in the tree, so they can't be scoped by
@@ -1018,19 +1033,32 @@ def run_streamlit_app():
             background: #1a3a6a !important;
             border-color: #2962ff !important;
         }
+        /* One calm accent (blue) does all the "this matters" signaling now —
+           the selected preset pill and the Run Market Scan button both use
+           kind="primary" — instead of the previous red/green pairing, which
+           made the whole toolbar read as a wall of alarm colors. Everything
+           else (Minimize, Maximize, Reset, Refresh, unselected presets) is
+           kind="secondary" and stays a quiet neutral so it doesn't compete
+           for attention. */
         div[data-testid="stHorizontalBlock"] button[kind="primary"] {
-            background: #f23645 !important; color: white !important;
+            background: #2962ff !important; color: white !important;
             border: none !important; border-radius: 6px !important; font-size: 0.85rem !important;
             height: 32px !important; line-height: 1 !important;
         }
         div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
-            background: #089981 !important; color: white !important;
-            border: none !important; border-radius: 6px !important; font-size: 0.85rem !important;
+            background: #232a38 !important; color: #d1d4dc !important;
+            border: 1px solid #3d4456 !important; border-radius: 6px !important; font-size: 0.85rem !important;
             height: 32px !important; line-height: 1 !important;
         }
+        div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
+            background: #2d3546 !important; border-color: #4d5670 !important; color: #ffffff !important;
+        }
         div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
-            background: #089981 !important; color: white !important;
-            border: none !important;
+            background: #232a38 !important; color: #d1d4dc !important;
+            border: 1px solid #3d4456 !important;
+        }
+        div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
+            background: #2d3546 !important; border-color: #4d5670 !important; color: #ffffff !important;
         }
         /* Secondary Neutral Button */
         div.stButton:nth-child(2) > button {
@@ -1047,8 +1075,12 @@ def run_streamlit_app():
             border-radius: initial !important; font-size: initial !important;
         }
         div[data-testid="stPopoverBody"] div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
-            background: initial !important; color: initial !important;
+            background: #232a38 !important; color: #d1d4dc !important;
+            border: 1px solid #3d4456 !important;
             border-radius: initial !important; font-size: initial !important;
+        }
+        div[data-testid="stPopoverBody"] div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
+            background: #2d3546 !important; border-color: #4d5670 !important; color: #ffffff !important;
         }
         div[data-testid="stPopoverBody"] { min-width: 90vw !important; }
         div[data-testid="stPopoverBody"] button p { white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
@@ -1204,19 +1236,24 @@ def run_streamlit_app():
             unsafe_allow_html=True
         )
     with thelp:
-        st.markdown("<div style='padding-top: 0.75rem;'></div>", unsafe_allow_html=True)
+        st.markdown(
+            "<div id='trendik-help-marker' style='padding-top: 0.6rem;'></div>",
+            unsafe_allow_html=True
+        )
         st.button(
             "", icon=":material/help:", type="tertiary", key="onboarding_help_btn", help=(
-                "New here? Trendik scans the S&P 500 for stocks matching the filters below "
-                "(Technical, Relative Position, Fundamentals, Distance to ATH) — hover any "
-                "❓ icon to see what a field does. A starter preset is loaded to get you "
-                "going; tweak it, click RUN MARKET SCAN, then save your own setup from "
-                "Filter Presets once you're happy with it."
+                "- Trendik scans the S&P 500 using the filters below (Technical, Relative "
+                "Position, Fundamentals, Distance to ATH)\n"
+                "- Hover any **❓** icon to see what a field does\n"
+                "- A starter preset is loaded — tweak it, then click **RUN MARKET SCAN**\n"
+                "- Save your own setup from **Filter Presets** once you're happy with it"
             )
         )
 
     # --- HORIZONTAL FILTER PANE ---
-    filters_expanded = not st.session_state.get("filters_minimized", False)
+    # Defaults to collapsed (True) on first load; Minimize/Maximize below set
+    # filters_minimized explicitly from then on.
+    filters_expanded = not st.session_state.get("filters_minimized", True)
     
     # --- PRESETS ---
     all_presets = load_presets()
@@ -1230,21 +1267,21 @@ def run_streamlit_app():
     with phelp:
         st.button(
             "", icon=":material/help:", type="tertiary", key="presets_help_btn", help=(
-                "Save your current filter settings under a name so you can reload them "
-                "instantly later, instead of re-entering every field each time. Click a "
-                "saved preset below to load it, or ⭐ favorite one to have it load "
-                "automatically the next time you open the app."
+                "- **Save** your current filters under a name to reload instantly later\n"
+                "- **Click** a preset to load it — click again to deselect\n"
+                "- Use a preset's **⋮ menu** for Favorite / Rename / Update / Delete\n"
+                "- **⭐** marks the preset that auto-loads on startup"
             )
         )
     with ppopover:
-        with st.popover("💾 Presets", key="presets_popover"):
+        with st.popover("Presets", icon=":material/bookmarks:", key="presets_popover"):
             st.markdown('<span id="presets-popover-marker"></span>', unsafe_allow_html=True)
             presets = load_presets()
             pcol1, pcol2 = st.columns([2, 1])
             with pcol1:
                 preset_name = st.text_input("Preset name", key="preset_name", label_visibility="collapsed", placeholder="Name your preset...")
             with pcol2:
-                if st.button("💾 Save", use_container_width=True, help="Save the current filter settings as a new preset with this name."):
+                if st.button("Save", icon=":material/save:", use_container_width=True, help="Save the current filter settings as a new preset with this name."):
                     if preset_name.strip():
                         presets[preset_name.strip()] = _current_filter_state()
                         save_presets(presets)
@@ -1252,11 +1289,6 @@ def run_streamlit_app():
                         st.rerun()
 
     if preset_names:
-        st.caption(
-            "Click a preset to load its filters — click it again to deselect. Use a "
-            "preset's ⋮ menu for Favorite / Rename / Update / Delete. ⭐ marks the "
-            "preset that auto-loads on startup."
-        )
         n = len(preset_names)
         if n < 7:
             cols = [1] * n + [7 - n]
@@ -1333,7 +1365,7 @@ def run_streamlit_app():
     col_t, col_r, col_f, col_a = st.columns(4)
 
     with col_t:
-        with st.expander("📈 Technical", expanded=filters_expanded):
+        with st.expander("Technical", icon=":material/show_chart:", expanded=filters_expanded):
             sma50_chk = st.checkbox(
                 "Above 50-Day SMA", value=True, key="sma50_chk",
                 help="Turn on to only show stocks currently trading above their 50-day average — catches short-term momentum."
@@ -1352,23 +1384,34 @@ def run_streamlit_app():
             )
             alignment_chk = st.checkbox(
                 "Bullish Alignment (50>100>150>200)", value=False, key="alignment_chk",
-                help="Turn on to require all four SMAs to stack in order (50 over 100 over 150 over 200). This is known as a 'perfect order' and signals strong momentum across every timeframe."
+                help=(
+                    "- Requires all four SMAs to stack in order (50 over 100 over 150 over 200)\n"
+                    "- Known as a **'perfect order'** — signals strong momentum across every timeframe"
+                )
             )
             st.markdown("**Volatility**")
             acol1, acol2 = st.columns(2)
             with acol1:
                 min_atr_pct = st.text_input(
                     "Min ATR%", value="", key="min_atr_pct", placeholder="e.g. 0.5",
-                    help="Minimum Average True Range as a % of price. Higher values mean more volatile stocks. For example, '2' means the stock must have at least 2% daily volatility."
+                    help=(
+                        "- Minimum Average True Range as a % of price\n"
+                        "- Higher values mean more volatile stocks\n"
+                        "- Example: '2' requires at least 2% daily volatility"
+                    )
                 )
             with acol2:
                 max_atr_pct = st.text_input(
                     "Max ATR%", value="", key="max_atr_pct", placeholder="e.g. 5",
-                    help="Maximum Average True Range as a % of price. For example, '5' caps volatility to at most 5%. Leave blank for no limit."
+                    help=(
+                        "- Maximum Average True Range as a % of price\n"
+                        "- Example: '5' caps volatility to at most 5%\n"
+                        "- Leave blank for no limit"
+                    )
                 )
 
     with col_r:
-        with st.expander("📐 Relative Position", expanded=filters_expanded):
+        with st.expander("Relative Position", icon=":material/straighten:", expanded=filters_expanded):
             growth_target_sma = st.selectbox(
                 "Target SMA",
                 ["50", "100", "150", "200"],
@@ -1376,24 +1419,43 @@ def run_streamlit_app():
                 format_func=lambda x: f"{x}-Day SMA",
                 label_visibility="collapsed",
                 key="growth_target_sma",
-                help="Pick which Simple Moving Average (SMA) to measure distance from: 50-Day (short-term), 100-Day (medium), 150-Day (mid-long), or 200-Day (long-term)."
+                help=(
+                    "Pick which Simple Moving Average (SMA) to measure distance from:\n"
+                    "- **50-Day** — short-term\n"
+                    "- **100-Day** — medium\n"
+                    "- **150-Day** — mid-long\n"
+                    "- **200-Day** — long-term"
+                )
             )
             sma_direction = st.selectbox(
                 "Position", ["Above (Price > SMA)", "Below (Price < SMA)"], index=0,
                 label_visibility="collapsed", key="sma_direction",
-                help="'Above' finds stocks trading over the SMA (bullish). 'Below' finds stocks under it (could mean a pullback or discount)."
+                help=(
+                    "- **Above** — stocks trading over the SMA (bullish)\n"
+                    "- **Below** — stocks trading under it (could mean a pullback or discount)"
+                )
             )
             min_sma_growth = st.text_input(
                 "Min %", value="", key="min_sma_growth", placeholder="e.g. 0",
-                help="Set a floor. For example, '2' means the stock must be at least 2% above (or below) the target SMA."
+                help=(
+                    "- Sets a floor\n"
+                    "- Example: '2' requires the stock to be at least 2% above (or below) the target SMA"
+                )
             )
             max_sma_growth = st.text_input(
                 "Max %", value="", key="max_sma_growth", placeholder="e.g. 10",
-                help="Set a ceiling. For example, '10' caps results to stocks no more than 10% away from the SMA. Leave blank for no limit."
+                help=(
+                    "- Sets a ceiling\n"
+                    "- Example: '10' caps results to stocks no more than 10% away from the SMA\n"
+                    "- Leave blank for no limit"
+                )
             )
             sma_slope = st.selectbox(
                 "SMA Slope", ["Disabled", "Rising", "Falling"], index=0, key="sma_slope",
-                help="'Rising' requires the target SMA to be higher than 5 days ago (uptrend). 'Falling' requires it to be lower (downtrend)."
+                help=(
+                    "- **Rising** — the target SMA must be higher than 5 days ago (uptrend)\n"
+                    "- **Falling** — it must be lower (downtrend)"
+                )
             )
             sma_slope_period = st.selectbox(
                 "Slope SMA", ["50", "100", "150", "200"], index=0,
@@ -1402,31 +1464,48 @@ def run_streamlit_app():
             )
 
     with col_f:
-        with st.expander("💰 Fundamentals", expanded=filters_expanded):
+        with st.expander("Fundamentals", icon=":material/account_balance:", expanded=filters_expanded):
             fund_mode = st.selectbox(
                 "Metric", ["Disabled", "Revenue Growth", "Earnings Growth"], index=0,
                 label_visibility="collapsed", key="fund_mode",
-                help="Choose 'Revenue Growth' to screen by sales increases, or 'Earnings Growth' for bottom-line profit growth. Set to 'Disabled' to skip fundamentals entirely."
+                help=(
+                    "- **Revenue Growth** — screen by sales increases\n"
+                    "- **Earnings Growth** — screen by bottom-line profit growth\n"
+                    "- **Disabled** — skip fundamentals entirely"
+                )
             )
             fund_rate = st.text_input(
                 "Min Rate %", value="", key="fund_rate", placeholder="e.g. 5",
-                help="The minimum year-over-year growth rate required. For example, '10' means the company must have grown revenue or earnings by at least 10% each year."
+                help=(
+                    "- The minimum year-over-year growth rate required\n"
+                    "- Example: '10' requires at least 10% growth each year"
+                )
             )
             fund_years = st.selectbox(
                 "Years", ["1", "2", "3"], index=0,
                 label_visibility="collapsed", key="fund_years",
-                help="How many consecutive years the growth rate must hold. '2' means the company grew at the minimum rate for two years running."
+                help=(
+                    "- How many consecutive years the growth rate must hold\n"
+                    "- Example: '2' requires the minimum rate for two years running"
+                )
             )
 
     with col_a:
-        with st.expander("🏔️ Distance to ATH", expanded=filters_expanded):
+        with st.expander("Distance to ATH", icon=":material/terrain:", expanded=filters_expanded):
             min_ath = st.text_input(
                 "Min %", value="", key="min_ath", placeholder="e.g. 1",
-                help="The furthest below its all-time high a stock can be. For example, '5' means the stock must be at least 5% below its peak."
+                help=(
+                    "- The furthest below its all-time high a stock can be\n"
+                    "- Example: '5' requires the stock to be at least 5% below its peak"
+                )
             )
             max_ath = st.text_input(
                 "Max %", value="", key="max_ath", placeholder="e.g. 20",
-                help="The closest to its all-time high a stock can be. For example, '20' excludes stocks more than 20% below their peak. Helps avoid deeply beaten-down names."
+                help=(
+                    "- The closest to its all-time high a stock can be\n"
+                    "- Example: '20' excludes stocks more than 20% below their peak\n"
+                    "- Helps avoid deeply beaten-down names"
+                )
             )
 
     # --- ACTION BUTTONS ROW ---
@@ -1434,15 +1513,15 @@ def run_streamlit_app():
     with acol1:
         inner1, inner2 = st.columns(2)
         with inner1:
-            if st.button("🔽 Minimize", use_container_width=True, key="min_filters"):
+            if st.button("Minimize", icon=":material/unfold_less:", use_container_width=True, key="min_filters"):
                 st.session_state.filters_minimized = True
                 st.rerun()
         with inner2:
-            if st.button("🔍 Maximize", use_container_width=True, key="max_filters"):
+            if st.button("Maximize", icon=":material/unfold_more:", use_container_width=True, key="max_filters"):
                 st.session_state.filters_minimized = False
                 st.rerun()
     with acol2:
-        if st.button("🔄 Reset Filters", use_container_width=True, key="reset_filters"):
+        if st.button("Reset Filters", icon=":material/restart_alt:", use_container_width=True, key="reset_filters"):
             st.session_state._reset_filters = True
             st.rerun()
     with acol3:
@@ -1454,7 +1533,10 @@ def run_streamlit_app():
         st.segmented_control(
             "Display", ["Absolute Prices ($)", "Percentage Distance (%)"],
             required=True, key="display_mode",
-            help="Only affects Price column format. SMA and SMA Dist columns are always visible.",
+            help=(
+                "- Only affects the **Price** column format\n"
+                "- **SMA** and **SMA Dist** columns are always visible"
+            ),
             **display_kwargs
         )
         # Refresh the sticky shadow copy now that this run actually reached the
@@ -1463,7 +1545,7 @@ def run_streamlit_app():
         st.session_state._display_mode_sticky = st.session_state.display_mode
     with acol4:
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
-        run_clicked = st.button("🚀 RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False)
+        run_clicked = st.button("RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False, type="primary")
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("---")
@@ -1501,8 +1583,6 @@ def run_streamlit_app():
     # --- MAIN SCREEN INTERFACE ---
     if validation_error:
         st.error(validation_error)
-    
-    st.markdown("---")
 
     # SCAN PROCESS EXECUTION HANDLER
     refresh = st.session_state.get("refresh_clicked", False)
@@ -1558,7 +1638,7 @@ def run_streamlit_app():
             rcol1, rcol2, rcol3, rcol4, rcol5 = st.columns([2, 1, 1.5, 1.5, 1])
         
             with rcol1:
-                st.markdown("#### 📋 Market Watchlist Results")
+                st.markdown("#### Market Watchlist Results")
         
             with rcol2:
                 count = len(st.session_state.get("raw_results", []))
@@ -1576,7 +1656,7 @@ def run_streamlit_app():
                 duration_html = ""
                 if "last_duration" in st.session_state:
                     duration_html += (
-                        f"<p style='font-size: 1rem; font-weight: 700; color: #2962ff; margin: 0; text-align: center;'>⏱️ Scan duration</p>"
+                        f"<p style='font-size: 1rem; font-weight: 700; color: #2962ff; margin: 0; text-align: center;'>Scan duration</p>"
                         f"<p style='font-size: 1.5rem; font-weight: 700; color: #d1d4dc; margin: 0; text-align: center;'>{st.session_state.last_duration:.1f}s</p>"
                     )
                 if "last_scan_time" in st.session_state:
@@ -1597,7 +1677,7 @@ def run_streamlit_app():
                 )
         
             with rcol5:
-                if st.button("🔄 Refresh", use_container_width=True):
+                if st.button("Refresh", icon=":material/refresh:", use_container_width=True):
                     st.cache_data.clear()
                     if os.path.exists(TECH_CACHE_FILE):
                         os.remove(TECH_CACHE_FILE)
@@ -1606,7 +1686,7 @@ def run_streamlit_app():
             
             col_sel, font_sel, _sel_spacer = st.columns([1, 1, 4])
             with col_sel:
-                with st.popover("👁️ Columns"):
+                with st.popover("Columns", icon=":material/view_column:"):
                     bcol1, bcol2 = st.columns(2)
                     with bcol1:
                         if st.button("Select All", use_container_width=True, type="primary"):
@@ -1636,16 +1716,31 @@ def run_streamlit_app():
                                 )
             with font_sel:
                 _presets_now = load_presets()
-                _font_tag = _presets_now.get("_font_size", "Normal (15px)")
-                _font_idx = FONT_SIZE_TAGS.index(_font_tag) if _font_tag in FONT_SIZE_TAGS else 1
-                st.selectbox(
-                    "Table text size",
-                    FONT_SIZE_TAGS,
-                    index=_font_idx,
-                    key="font_size_tag",
-                    on_change=_set_font_size,
-                    label_visibility="collapsed",
-                )
+                _font_tag = st.session_state.get("font_size_tag") or _presets_now.get("_font_size", "Normal (15px)")
+                if _font_tag not in FONT_SIZE_TAGS:
+                    _font_tag = "Normal (15px)"
+                _font_idx = FONT_SIZE_TAGS.index(_font_tag)
+                st.session_state.font_size_tag = _font_tag
+
+                fa_dec, fa_inc = st.columns(2)
+                with fa_dec:
+                    at_min = _font_idx == 0
+                    if st.button(
+                        "a", key="font_size_dec", use_container_width=True, disabled=at_min,
+                        help="Smaller table text" if at_min else f"Switch to {FONT_SIZE_TAGS[_font_idx - 1]}"
+                    ):
+                        st.session_state.font_size_tag = FONT_SIZE_TAGS[_font_idx - 1]
+                        _set_font_size()
+                        st.rerun(scope="fragment")
+                with fa_inc:
+                    at_max = _font_idx == len(FONT_SIZE_TAGS) - 1
+                    if st.button(
+                        "A", key="font_size_inc", use_container_width=True, disabled=at_max,
+                        help="Larger table text" if at_max else f"Switch to {FONT_SIZE_TAGS[_font_idx + 1]}"
+                    ):
+                        st.session_state.font_size_tag = FONT_SIZE_TAGS[_font_idx + 1]
+                        _set_font_size()
+                        st.rerun(scope="fragment")
             raw_results = st.session_state.get("raw_results", [])
 
             if not raw_results:
@@ -1673,8 +1768,6 @@ def run_streamlit_app():
                         key="watchlist_csv_download",
                         use_container_width=True
                     )
-        else:
-            st.info("ℹ️ System Ready. Set your filters above, then click **RUN MARKET SCAN** to begin.")
 
     _render_results_section()
 
