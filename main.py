@@ -873,14 +873,15 @@ def run_streamlit_app():
            ancestry — :has() with a marker element is the only way to target
            just this one popover instead of every stPopoverBody on the page. */
         div[data-testid="stPopoverBody"]:has(#presets-popover-marker) {
-            width: 340px !important;
-            min-width: 340px !important;
+            width: min(340px, 92vw) !important;
+            min-width: min(340px, 92vw) !important;
         }
         /* Same technique for each preset's ⋮ management menu — without this it
-           inherits the min-width: 90vw catch-all below meant for other popovers. */
+           inherits the min-width: 90vw catch-all below meant for other popovers.
+           min() with a vw cap keeps both panels from overflowing a phone screen. */
         div[data-testid="stPopoverBody"]:has(.preset-menu-marker) {
-            width: 220px !important;
-            min-width: 220px !important;
+            width: min(220px, 85vw) !important;
+            min-width: min(220px, 85vw) !important;
         }
         div[data-testid="stPopoverBody"]:has(.preset-menu-marker) button[kind="secondary"] {
             background: #2a2e39 !important; color: #d1d4dc !important;
@@ -1051,6 +1052,50 @@ def run_streamlit_app():
         }
         div[data-testid="stPopoverBody"] { min-width: 90vw !important; }
         div[data-testid="stPopoverBody"] button p { white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+
+        /* --- Phone-width layout (matches Streamlit's own st.columns stacking
+           breakpoint, so this kicks in exactly when the 4-column filter row,
+           button rows, and stat tiles have already reflowed to one column). ---
+           The rest of the stylesheet above was tuned for a dense desktop
+           terminal — small type, tight padding, hover-revealed affordances.
+           None of that translates to a touchscreen, so this block loosens
+           tap targets and spacing rather than relying on new selectors. */
+        @media (max-width: 640px) {
+            .block-container {
+                padding-left: 0.75rem !important;
+                padding-right: 0.75rem !important;
+            }
+            /* Preset pills and their ⋮ menu triggers: the desktop sizing
+               (0.75rem text, 0.15rem padding) is well under the ~44px
+               touch-target guideline. */
+            button[id^="preset_box_"] {
+                font-size: 0.9rem !important;
+                padding: 0.6rem 0.75rem !important;
+                min-height: 44px !important;
+            }
+            button[data-testid="stPopoverButton"]:not(:has([data-testid="stMarkdownContainer"])) {
+                width: 44px !important; min-width: 44px !important; height: 44px !important;
+            }
+            /* Checkbox/label text and row height inside the filter cards. */
+            div[data-testid="stExpander"] label {
+                font-size: 0.95rem !important;
+            }
+            div[data-testid="stExpander"] input {
+                font-size: 0.95rem !important;
+            }
+            div[data-testid="stCheckbox"] {
+                padding: 0.25rem 0 !important;
+            }
+            /* Action buttons (Minimize/Maximize/Reset/Run Scan) stack full-width
+               already; just make sure they're tall enough to tap reliably. */
+            .stButton > button {
+                min-height: 44px !important;
+            }
+            div[data-testid="stHorizontalBlock"] button[kind="primary"],
+            div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
+                min-height: 44px !important;
+            }
+        }
     </style>
     """, unsafe_allow_html=True)
     
