@@ -830,9 +830,16 @@ def run_streamlit_app():
             max-width: 100% !important;
         }
         
-        /* Reduce all vertical gaps */
+        /* Reduce all vertical gaps. The margin-bottom rule alone stopped being
+           enough once Streamlit switched to flexbox `gap` for spacing stacked
+           blocks (e.g. the Presets title row -> preset pills -> Display row) —
+           that gap defaults to 16px and doesn't respond to child margins at
+           all, so it has to be overridden directly. */
         div[data-testid="stVerticalBlock"] > div {
             margin-bottom: 0.25rem !important;
+        }
+        div[data-testid="stVerticalBlock"] {
+            gap: 0.5rem !important;
         }
         hr {
             margin-top: 0.3rem !important;
@@ -1392,7 +1399,16 @@ def run_streamlit_app():
                             save_presets(presets)
                             st.rerun()
 
-    col_t, col_r, col_f, col_a = st.columns(4)
+    # Reserve the page's visual sections in the order requested — Scan
+    # controls, then Watchlist, then Filters — as empty placeholders. They're
+    # populated out of order below: the filter widgets have to run first in
+    # code since their return values feed the scan, even though the Filters
+    # panel itself is the last thing visually on the page.
+    scan_area = st.container()
+    results_area = st.container()
+    filters_area = st.container()
+
+    col_t, col_r, col_f, col_a = filters_area.columns(4)
 
     with col_t:
         with st.expander("Technical", icon=":material/show_chart:", expanded=filters_expanded):
@@ -1553,8 +1569,8 @@ def run_streamlit_app():
                 )
             )
 
-    # --- ACTION BUTTONS ROW ---
-    acol1, acol2, acol3, acol4 = st.columns([1.5, 0.5, 1, 2.5])
+    # --- FILTER-PANEL CONTROLS (Minimize/Maximize/Reset) — stay with Filters ---
+    acol1, acol2, _facol_spacer = filters_area.columns([1.5, 0.5, 3])
     with acol1:
         inner1, inner2 = st.columns(2)
         with inner1:
@@ -1569,6 +1585,9 @@ def run_streamlit_app():
         if st.button("Reset Filters", icon=":material/restart_alt:", use_container_width=True, key="reset_filters"):
             st.session_state._reset_filters = True
             st.rerun()
+
+    # --- SCAN CONTROLS (Display + Run Scan) — moved up to the Scan area ---
+    acol3, acol4, _sacol_spacer = scan_area.columns([1.3, 1.5, 3])
     with acol3:
         # Rendered unconditionally (not inside the results fragment below) so this
         # widget mounts on the app's very first run — see the sticky-restore note
@@ -1593,22 +1612,20 @@ def run_streamlit_app():
         run_clicked = st.button("RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False, type="primary")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("---")
-
     # Inputs Parsing and Live Validation
     try:
         min_ath_filter = parse_numeric_filter(min_ath, "Min Distance to ATH")
         max_ath_filter = parse_numeric_filter(max_ath, "Max Distance to ATH")
-        
+
         min_sma_growth_filter = parse_numeric_filter(min_sma_growth, "Min Position %")
         max_sma_growth_filter = parse_numeric_filter(max_sma_growth, "Max Position %")
-        
+
         min_atr_filter = parse_numeric_filter(min_atr_pct, "Min ATR%")
         max_atr_filter = parse_numeric_filter(max_atr_pct, "Max ATR%")
-        
+
         fund_rate_target = parse_numeric_filter(fund_rate, "Min Rate %")
         fund_years_target = int(fund_years)
-        
+
         if fund_mode != "Disabled" and fund_rate_target is None:
             validation_error = "⚠️ Please provide a target Min Rate percentage for fundamentals."
             can_run_scan = False
@@ -1620,56 +1637,59 @@ def run_streamlit_app():
     # while rendering the Technical panel's per-SMA buttons.
     is_above_mode = ("Above" in sma_direction)
 
-    # --- MAIN SCREEN INTERFACE ---
-    if validation_error:
-        st.error(validation_error)
+    # --- MAIN SCREEN INTERFACE (rendered into the Scan area reserved above) ---
+    with scan_area:
+        st.markdown("---")
 
-    # SCAN PROCESS EXECUTION HANDLER
-    refresh = st.session_state.get("refresh_clicked", False)
-    if refresh:
-        st.session_state.refresh_clicked = False
-    if run_clicked or refresh:
-        st.session_state.filters_minimized = True
-        with st.status("🚀 Running Scan...", expanded=True) as status:
-            try:
-                status.write("📥 Downloading 1-year market data for all S&P 500 stocks...")
-                start_time = time.time()
-                
-                raw_results, num_candidates = run_scanner(
-                    tickers=st.session_state.sp500_tickers,
-                    tickers_dict=st.session_state.sp500_data,
-                    sma_selections=sma_selections,
-                    alignment_enabled=alignment_chk,
-                    min_ath_filter=min_ath_filter,
-                    max_ath_filter=max_ath_filter,
-                    growth_sma_period=int(growth_target_sma),
-                    is_above_mode=is_above_mode,
-                    min_sma_growth_filter=min_sma_growth_filter,
-                    max_sma_growth_filter=max_sma_growth_filter,
-                    min_atr_filter=min_atr_filter,
-                    max_atr_filter=max_atr_filter,
-                    fund_mode=fund_mode,
-                    fund_rate_target=fund_rate_target,
-                    fund_years_target=fund_years_target,
-                    sma_slope=st.session_state.get("sma_slope", "Disabled"),
-                    sma_slope_period=int(st.session_state.get("sma_slope_period", "50"))
-                )
-                
-                duration = time.time() - start_time
-                
-                # Save results to context state
-                st.session_state.raw_results = raw_results
-                st.session_state.num_candidates = num_candidates
-                st.session_state.last_duration = duration
-                st.session_state.last_scan_time = time.strftime("%d/%m/%Y %H:%M")
-                st.session_state.scan_complete = True
-                
-                status.update(label=f"✅ Scan completed in {duration:.1f}s!", state="complete", expanded=False)
-                st.rerun()
-                
-            except Exception as e:
-                status.update(label="❌ Scan failed!", state="error", expanded=True)
-                st.error(f"Engine Failure: {e}")
+        if validation_error:
+            st.error(validation_error)
+
+        # SCAN PROCESS EXECUTION HANDLER
+        refresh = st.session_state.get("refresh_clicked", False)
+        if refresh:
+            st.session_state.refresh_clicked = False
+        if run_clicked or refresh:
+            st.session_state.filters_minimized = True
+            with st.status("🚀 Running Scan...", expanded=True) as status:
+                try:
+                    status.write("📥 Downloading 1-year market data for all S&P 500 stocks...")
+                    start_time = time.time()
+
+                    raw_results, num_candidates = run_scanner(
+                        tickers=st.session_state.sp500_tickers,
+                        tickers_dict=st.session_state.sp500_data,
+                        sma_selections=sma_selections,
+                        alignment_enabled=alignment_chk,
+                        min_ath_filter=min_ath_filter,
+                        max_ath_filter=max_ath_filter,
+                        growth_sma_period=int(growth_target_sma),
+                        is_above_mode=is_above_mode,
+                        min_sma_growth_filter=min_sma_growth_filter,
+                        max_sma_growth_filter=max_sma_growth_filter,
+                        min_atr_filter=min_atr_filter,
+                        max_atr_filter=max_atr_filter,
+                        fund_mode=fund_mode,
+                        fund_rate_target=fund_rate_target,
+                        fund_years_target=fund_years_target,
+                        sma_slope=st.session_state.get("sma_slope", "Disabled"),
+                        sma_slope_period=int(st.session_state.get("sma_slope_period", "50"))
+                    )
+
+                    duration = time.time() - start_time
+
+                    # Save results to context state
+                    st.session_state.raw_results = raw_results
+                    st.session_state.num_candidates = num_candidates
+                    st.session_state.last_duration = duration
+                    st.session_state.last_scan_time = time.strftime("%d/%m/%Y %H:%M")
+                    st.session_state.scan_complete = True
+
+                    status.update(label=f"✅ Scan completed in {duration:.1f}s!", state="complete", expanded=False)
+                    st.rerun()
+
+                except Exception as e:
+                    status.update(label="❌ Scan failed!", state="error", expanded=True)
+                    st.error(f"Engine Failure: {e}")
 
     # WATCHLIST RESULTS RENDERER
     @st.fragment
@@ -1809,7 +1829,8 @@ def run_streamlit_app():
                         use_container_width=True
                     )
 
-    _render_results_section()
+    with results_area:
+        _render_results_section()
 
 
 # =====================================================================
