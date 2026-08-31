@@ -49,11 +49,14 @@ Everything lives in `main.py`, organized top-to-bottom into clearly commented se
    `st.session_state` (`_presets_cache`) so repeated reruns within a session don't re-hit disk.
 
    **Auth**: `run_streamlit_app()` gates everything past `st.set_page_config` on
-   `st.user.is_logged_in` (Streamlit's native Google OAuth via `st.login()`/`st.logout()`,
-   configured through `[auth]` in `.streamlit/secrets.toml` — gitignored, never commit real
-   credentials). Any Google account may sign in; there is no allowlist. Because presets/columns
-   are looked up by `st.user.email`, no code before the login gate may call `load_presets()` /
-   `load_column_prefs()`.
+   `st.user.is_logged_in` OR a `st.session_state._guest_mode` flag set by the gate's "Continue
+   as guest" button (Google OAuth via Streamlit's native `st.login()`/`st.logout()`, configured
+   through `[auth]` in `.streamlit/secrets.toml` — gitignored, never commit real credentials).
+   Any Google account may sign in; there is no allowlist. `load_presets`/`save_presets` and
+   `load_column_prefs`/`save_column_prefs` each branch on `st.user.is_logged_in` themselves: a
+   guest's data lives only in `st.session_state` (`_guest_presets`/`_guest_columns`) and is never
+   written to disk, so it's gone once the browser session ends. No code before the login gate may
+   call these four functions.
 
 2. **Cached data fetching layer** (`@st.cache_data`) — `get_sp500_tickers()` scrapes the
    Wikipedia constituents table; `download_technical_data()` bulk-downloads 1y OHLC via

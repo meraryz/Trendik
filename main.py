@@ -21,7 +21,7 @@ PERSIST_PRESETS_KEY = "_presets_cache"
 # Below) per period rather than a plain "must be above" checkbox.
 SMA_PERIODS = [50, 100, 150, 200]
 SMA_POS_CYCLE = {"None": "Above", "Above": "Below", "Below": "None"}
-SMA_POS_DEFAULT = {50: "Above", 100: "None", 150: "None", 200: "None"}
+SMA_POS_DEFAULT = {50: "None", 100: "None", 150: "None", 200: "None"}
 SMA_POS_ICON = {"None": "—", "Above": "↑", "Below": "↓"}
 SMA_POS_FLAVOR = {
     50: "short-term momentum",
@@ -51,10 +51,16 @@ def _all_presets():
 
 def load_presets():
     """Presets belonging to the signed-in Google account. A new account starts with
-    none — nothing is auto-seeded onto a Google login that hasn't saved anything yet."""
+    none — nothing is auto-seeded onto a Google login that hasn't saved anything yet.
+    A guest (no account) gets session-only presets that are never written to disk."""
+    if not st.user.is_logged_in:
+        return st.session_state.get("_guest_presets", {})
     return _all_presets().get(st.user.email, {})
 
 def save_presets(presets):
+    if not st.user.is_logged_in:
+        st.session_state["_guest_presets"] = presets
+        return
     all_presets = _all_presets()
     all_presets[st.user.email] = presets
     with open(PRESETS_FILE, "w") as f:
@@ -91,7 +97,7 @@ def _current_filter_state():
         "fund_years": st.session_state.fund_years,
         "min_ath": st.session_state.min_ath,
         "max_ath": st.session_state.max_ath,
-        "display_mode": st.session_state.display_mode,
+        "display_mode": st.session_state.get("display_mode", "Absolute Prices ($)"),
         "sma_slope": st.session_state.get("sma_slope", "Disabled"),
         "sma_slope_period": st.session_state.get("sma_slope_period", "50"),
         "visible_columns": st.session_state.visible_columns,
@@ -114,9 +120,15 @@ def _all_column_prefs():
     return data
 
 def load_column_prefs():
+    """A guest (no account) gets session-only column prefs, never written to disk."""
+    if not st.user.is_logged_in:
+        return st.session_state.get("_guest_columns")
     return _all_column_prefs().get(st.user.email)
 
 def save_column_prefs(cols):
+    if not st.user.is_logged_in:
+        st.session_state["_guest_columns"] = cols
+        return
     all_cols = _all_column_prefs()
     all_cols[st.user.email] = cols
     with open(COLUMNS_FILE, "w") as f:
@@ -810,8 +822,10 @@ def run_streamlit_app():
     )
 
     # Presets and column choices are scoped per Google account (see load_presets /
-    # load_column_prefs), so nothing below may render before a user is signed in.
-    if not st.user.is_logged_in:
+    # load_column_prefs), so nothing below may render before a user is signed in —
+    # unless they've chosen to continue as a guest, in which case those helpers fall
+    # back to session-only (non-persisted) storage instead of st.user.email.
+    if not st.user.is_logged_in and not st.session_state.get("_guest_mode"):
         st.markdown(
             "<div style='text-align:center; margin-top:15vh;'>"
             "<div style='font-size:2.2rem; font-weight:800;'>Trendik</div>"
@@ -824,6 +838,12 @@ def run_streamlit_app():
         with mid:
             if st.button("Sign in with Google", use_container_width=True, type="primary"):
                 st.login()
+            if st.button("Continue as guest", use_container_width=True, type="tertiary", help=(
+                "You can use every scan/filter feature, but presets and column choices "
+                "only last for this browser session — nothing is saved once you leave."
+            )):
+                st.session_state._guest_mode = True
+                st.rerun()
         st.stop()
 
     # Load the Inter typeface the CSS below already asks for by name — without this
@@ -900,6 +920,12 @@ def run_streamlit_app():
             border-radius: 10px;
             padding: 0.5rem 0.75rem;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+        }
+        /* The Display toggle sits right under the "Display" stat tile — inset it
+           to match the tile's own padding (0.75rem) so its square corners don't
+           visually poke out past the tile's 10px-radius rounded ones above it. */
+        div[data-testid="stButtonGroup"] {
+            margin: 0.5rem 0.75rem 0 0.75rem;
         }
         div[data-testid="stExpander"]:hover {
             border-color: rgba(41, 98, 255, 0.45) !important;
@@ -1117,6 +1143,21 @@ def run_streamlit_app():
         div[data-testid="stHorizontalBlock"] button[kind="secondary"]:hover {
             background: #2d3546 !important; border-color: #4d5670 !important; color: #ffffff !important;
         }
+        /* "Jump to Filters" is a plain <a href="#..."> (a same-page scroll is a
+           client-side action, not a rerun-worthy state change), styled to match
+           the secondary button look above so it doesn't read as a stray link. */
+        html { scroll-behavior: smooth; }
+        a.jump-to-filters-btn {
+            display: inline-flex; align-items: center; justify-content: center;
+            height: 32px; padding: 0 0.9rem; border-radius: 6px; font-size: 0.85rem;
+            background: #232a38; color: #d1d4dc !important; border: 1px solid #3d4456;
+            text-decoration: none !important; white-space: nowrap;
+            transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+        }
+        a.jump-to-filters-btn:hover {
+            background: #2d3546; border-color: #4d5670; color: #ffffff !important;
+            transform: translateY(-1px);
+        }
         div[data-testid="stHorizontalBlock"] div[data-testid="stHorizontalBlock"] button[kind="secondary"] {
             background: #232a38 !important; color: #d1d4dc !important;
             border: 1px solid #3d4456 !important;
@@ -1227,14 +1268,15 @@ def run_streamlit_app():
     if toast_msg:
         st.toast(toast_msg)
 
-    # Restore the Display toggle if it got wiped: any button below (Minimize,
-    # Update, Delete, Favorite, ...) sets state then calls st.rerun() *before*
-    # the segmented_control's own line ever executes that run — Streamlit aborts
-    # that run at the st.rerun() call, so it never "sees" the display_mode widget
-    # get created and garbage-collects its session_state entry. The next run then
-    # starts with the key missing and the widget falls back to its literal
-    # default, silently discarding whatever the user had selected. A sticky copy
-    # (refreshed right after the widget renders, see below) survives that gap.
+    # Restore the Display toggle if it got wiped: it only renders once results
+    # exist (see the "Display" stat tile in _render_results_section), so any
+    # button above it (Minimize, Update, Delete, Favorite, ...) that sets state
+    # and calls st.rerun() *before* that line ever executes this run aborts the
+    # run there — Streamlit never "sees" the segmented_control get created and
+    # garbage-collects its session_state entry. The next run then starts with
+    # the key missing and the widget falls back to its literal default, silently
+    # discarding whatever the user had selected. A sticky copy (refreshed right
+    # after the widget renders, see below) survives that gap.
     if "display_mode" not in st.session_state and "_display_mode_sticky" in st.session_state:
         st.session_state.display_mode = st.session_state._display_mode_sticky
 
@@ -1318,14 +1360,20 @@ def run_streamlit_app():
     with tspacer:
         acc1, acc2 = st.columns([5, 1])
         with acc1:
+            label = st.user.email if st.user.is_logged_in else "Guest — presets won't be saved"
             st.markdown(
                 f"<div style='text-align:right; padding-top:0.7rem; color:#888; font-size:0.8rem;'>"
-                f"{st.user.email}</div>",
+                f"{label}</div>",
                 unsafe_allow_html=True,
             )
         with acc2:
-            if st.button("Sign out", type="tertiary", key="logout_btn"):
-                st.logout()
+            if st.user.is_logged_in:
+                if st.button("Sign out", type="tertiary", key="logout_btn"):
+                    st.logout()
+            else:
+                if st.button("Sign in", type="tertiary", key="guest_signin_btn"):
+                    st.session_state._guest_mode = False
+                    st.login()
 
     # --- HORIZONTAL FILTER PANE ---
     # Defaults to collapsed (True) on first load; Minimize/Maximize below set
@@ -1338,9 +1386,17 @@ def run_streamlit_app():
     fav = all_presets.get("_favorite", "")
     active = st.session_state.get("_active_preset", "")
     
-    ptitle, ppopover, phelp, prespacer = st.columns([1, 0.5, 0.2, 4.3])
+    ptitle, ppopover, pjump, phelp, prespacer = st.columns([1, 0.5, 0.9, 0.2, 3.4])
     with ptitle:
         st.markdown("<div style='padding-top: 0.4rem;'><b>Filter Presets</b></div>", unsafe_allow_html=True)
+    with pjump:
+        # A plain anchor link rather than an st.button: jumping to the filters
+        # panel is a same-page scroll, not a state change, so it should be an
+        # instant client-side action with no Streamlit rerun round-trip.
+        st.markdown(
+            '<a href="#filters-anchor" class="jump-to-filters-btn">Jump to Filters</a>',
+            unsafe_allow_html=True
+        )
     with phelp:
         st.button(
             "", icon=":material/help:", type="tertiary", key="presets_help_btn", help=(
@@ -1448,6 +1504,7 @@ def run_streamlit_app():
     results_area = st.container()
     filters_area = st.container()
 
+    filters_area.markdown('<div id="filters-anchor"></div>', unsafe_allow_html=True)
     col_t, col_r, col_f, col_a = filters_area.columns(4)
 
     with col_t:
@@ -1626,27 +1683,9 @@ def run_streamlit_app():
             st.session_state._reset_filters = True
             st.rerun()
 
-    # --- SCAN CONTROLS (Display + Run Scan) — moved up to the Scan area ---
-    acol3, acol4, _sacol_spacer = scan_area.columns([1.3, 1.5, 3])
-    with acol3:
-        # Rendered unconditionally (not inside the results fragment below) so this
-        # widget mounts on the app's very first run — see the sticky-restore note
-        # near the top of this function for why a plain `key=` isn't enough to
-        # keep this widget's value alive across every button click in this panel.
-        display_kwargs = {} if "display_mode" in st.session_state else {"default": "Absolute Prices ($)"}
-        st.segmented_control(
-            "Display", ["Absolute Prices ($)", "Percentage Distance (%)"],
-            required=True, key="display_mode",
-            help=(
-                "- Only affects the **Price** column format\n"
-                "- **SMA** and **SMA Dist** columns are always visible"
-            ),
-            **display_kwargs
-        )
-        # Refresh the sticky shadow copy now that this run actually reached the
-        # widget, so the next aborted run (any button above that calls
-        # st.rerun()) has something to restore from.
-        st.session_state._display_mode_sticky = st.session_state.display_mode
+    # --- SCAN CONTROLS (Run Scan) — Display now lives next to the results, see
+    # the "Display" stat tile in _render_results_section below. ---
+    acol4, _sacol_spacer = scan_area.columns([1.5, 3])
     with acol4:
         st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
         run_clicked = st.button("RUN MARKET SCAN", disabled=not can_run_scan, use_container_width=False, type="primary")
@@ -1775,6 +1814,20 @@ def run_streamlit_app():
                     "</div>",
                     unsafe_allow_html=True
                 )
+                display_kwargs = {} if "display_mode" in st.session_state else {"default": "Absolute Prices ($)"}
+                display_mode = st.segmented_control(
+                    "Display", ["Absolute Prices ($)", "Percentage Distance (%)"],
+                    required=True, key="display_mode", label_visibility="collapsed",
+                    help=(
+                        "- Only affects the **Price** column format\n"
+                        "- **SMA** and **SMA Dist** columns are always visible"
+                    ),
+                    **display_kwargs
+                )
+                # Refresh the sticky shadow copy now that this run actually reached the
+                # widget, so the next aborted run (any button above that calls
+                # st.rerun()) has something to restore from.
+                st.session_state._display_mode_sticky = st.session_state.display_mode
         
             with rcol5:
                 if st.button("Refresh", icon=":material/refresh:", use_container_width=True):
