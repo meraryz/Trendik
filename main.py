@@ -17,20 +17,6 @@ PRESETS_FILE = "filter_presets.json"
 COLUMNS_FILE = "user_columns.json"
 PERSIST_PRESETS_KEY = "_presets_cache"
 
-# Shown to brand-new installs (no filter_presets.json yet) as a working starting point,
-# auto-favorited so it loads without the user needing to know presets exist.
-DEFAULT_PRESET_NAME = "Starter (Uptrend)"
-DEFAULT_PRESET = {
-    "sma150_pos": "Above",
-    "growth_target_sma": "150",
-    "sma_direction": "Above (Price > SMA)",
-    "min_sma_growth": "0",
-    "max_sma_growth": "10",
-    "sma_slope": "Rising",
-    "sma_slope_period": "150",
-    "max_ath": "20",
-}
-
 # The Technical panel's per-SMA filter is a single 3-state button (None/Above/
 # Below) per period rather than a plain "must be above" checkbox.
 SMA_PERIODS = [50, 100, 150, 200]
@@ -44,22 +30,36 @@ SMA_POS_FLAVOR = {
     200: "the classic long-term bull/bear indicator",
 }
 
-def load_presets():
+def _all_presets():
+    """The full on-disk presets file: {user_email: {preset_name: {...}, "_favorite": ..., ...}}."""
     if PERSIST_PRESETS_KEY in st.session_state:
         return st.session_state[PERSIST_PRESETS_KEY]
     if not os.path.exists(PRESETS_FILE):
-        presets = {DEFAULT_PRESET_NAME: dict(DEFAULT_PRESET), "_favorite": DEFAULT_PRESET_NAME}
-        save_presets(presets)
-        return presets
-    with open(PRESETS_FILE) as f:
-        presets = json.load(f)
-    st.session_state[PERSIST_PRESETS_KEY] = presets
-    return presets
+        all_presets = {}
+    else:
+        with open(PRESETS_FILE) as f:
+            all_presets = json.load(f)
+        if "_favorite" in all_presets:
+            # Pre-account file: a single flat {preset_name: {...}, "_favorite": ...}
+            # belonging to one local user. Fold it into whichever account opens the
+            # app first post-migration rather than orphaning it under old top-level keys.
+            all_presets = {st.user.email: all_presets}
+            with open(PRESETS_FILE, "w") as f:
+                json.dump(all_presets, f, indent=2)
+    st.session_state[PERSIST_PRESETS_KEY] = all_presets
+    return all_presets
+
+def load_presets():
+    """Presets belonging to the signed-in Google account. A new account starts with
+    none — nothing is auto-seeded onto a Google login that hasn't saved anything yet."""
+    return _all_presets().get(st.user.email, {})
 
 def save_presets(presets):
+    all_presets = _all_presets()
+    all_presets[st.user.email] = presets
     with open(PRESETS_FILE, "w") as f:
-        json.dump(presets, f, indent=2)
-    st.session_state[PERSIST_PRESETS_KEY] = presets
+        json.dump(all_presets, f, indent=2)
+    st.session_state[PERSIST_PRESETS_KEY] = all_presets
 
 def _migrate_sma_checkboxes(preset_dict):
     """Old presets store each SMA as a plain True/False "must be above" checkbox
@@ -97,18 +97,30 @@ def _current_filter_state():
         "visible_columns": st.session_state.visible_columns,
     }
 
-def load_column_prefs():
+def _all_column_prefs():
+    """The full on-disk column-prefs file: {user_email: [col, col, ...]}."""
     if not os.path.exists(COLUMNS_FILE):
-        return None
+        return {}
     try:
         with open(COLUMNS_FILE) as f:
-            return json.load(f)
+            data = json.load(f)
     except Exception:
-        return None
+        return {}
+    if isinstance(data, list):
+        # Pre-account file: a single flat column list belonging to one local user.
+        data = {st.user.email: data}
+        with open(COLUMNS_FILE, "w") as f:
+            json.dump(data, f)
+    return data
+
+def load_column_prefs():
+    return _all_column_prefs().get(st.user.email)
 
 def save_column_prefs(cols):
+    all_cols = _all_column_prefs()
+    all_cols[st.user.email] = cols
     with open(COLUMNS_FILE, "w") as f:
-        json.dump(cols, f)
+        json.dump(all_cols, f)
 
 def _toggle_col(col):
     if st.session_state.get(f"_col_t_{col}", False):
@@ -796,7 +808,24 @@ def run_streamlit_app():
         layout="wide",
         initial_sidebar_state="collapsed"
     )
-    
+
+    # Presets and column choices are scoped per Google account (see load_presets /
+    # load_column_prefs), so nothing below may render before a user is signed in.
+    if not st.user.is_logged_in:
+        st.markdown(
+            "<div style='text-align:center; margin-top:15vh;'>"
+            "<div style='font-size:2.2rem; font-weight:800;'>Trendik</div>"
+            "<div style='color:#888; margin-bottom:1.5rem;'>"
+            "Sign in with Google to save and load your own filter presets.</div>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        _, mid, _ = st.columns([2, 1, 2])
+        with mid:
+            if st.button("Sign in with Google", use_container_width=True, type="primary"):
+                st.login()
+        st.stop()
+
     # Load the Inter typeface the CSS below already asks for by name — without this
     # link every font-family: 'Inter' rule silently falls back to a default sans-serif.
     st.markdown(
@@ -823,7 +852,7 @@ def run_streamlit_app():
 
         /* Tight compact layout padding adjustment */
         .block-container {
-            padding-top: 1.5rem !important;
+            padding-top: 4rem !important;
             padding-bottom: 0.5rem !important;
             padding-left: 1.5rem !important;
             padding-right: 1.5rem !important;
@@ -1282,10 +1311,21 @@ def run_streamlit_app():
                 "- Trendik scans the S&P 500 using the filters below (Technical, Relative "
                 "Position, Fundamentals, Distance to ATH)\n"
                 "- Hover any **❓** icon to see what a field does\n"
-                "- A starter preset is loaded — tweak it, then click **RUN MARKET SCAN**\n"
+                "- Set up your filters, then click **RUN MARKET SCAN**\n"
                 "- Save your own setup from **Filter Presets** once you're happy with it"
             )
         )
+    with tspacer:
+        acc1, acc2 = st.columns([5, 1])
+        with acc1:
+            st.markdown(
+                f"<div style='text-align:right; padding-top:0.7rem; color:#888; font-size:0.8rem;'>"
+                f"{st.user.email}</div>",
+                unsafe_allow_html=True,
+            )
+        with acc2:
+            if st.button("Sign out", type="tertiary", key="logout_btn"):
+                st.logout()
 
     # --- HORIZONTAL FILTER PANE ---
     # Defaults to collapsed (True) on first load; Minimize/Maximize below set

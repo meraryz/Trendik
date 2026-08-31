@@ -5,3 +5,6 @@ __pycache__/
 .env
 sp500_tickers_cache.json
 sp500_technical_cache.pkl
+# Per-account data (Google email -> presets/columns) — not shareable via git.
+filter_presets.json
+user_columns.json
